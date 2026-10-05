@@ -1,0 +1,62 @@
+name: Build TCL Remote
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Arrange files
+        run: |
+          mkdir -p lib/atv assets scripts
+          for f in connection der identity keys proto; do if [ -f $f.dart ]; then mv $f.dart lib/atv/; fi; done
+          for f in main store scanner; do if [ -f $f.dart ]; then mv $f.dart lib/; fi; done
+          for f in icon.png icon_fg.png; do if [ -f $f ]; then mv $f assets/; fi; done
+          if [ -f prepare.sh ]; then mv prepare.sh scripts/; fi
+          rm -f build.yml download
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: bash scripts/prepare.sh
+      - run: flutter build apk --release
+      - run: cp build/app/outputs/flutter-apk/app-release.apk TCL-Remote.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TCL-Remote-Android
+          path: TCL-Remote.apk
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Arrange files
+        run: |
+          mkdir -p lib/atv assets scripts
+          for f in connection der identity keys proto; do if [ -f $f.dart ]; then mv $f.dart lib/atv/; fi; done
+          for f in main store scanner; do if [ -f $f.dart ]; then mv $f.dart lib/; fi; done
+          for f in icon.png icon_fg.png; do if [ -f $f ]; then mv $f assets/; fi; done
+          if [ -f prepare.sh ]; then mv prepare.sh scripts/; fi
+          rm -f build.yml download
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: bash scripts/prepare.sh
+      - run: flutter build ios --release --no-codesign
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qr TCL-Remote.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TCL-Remote-iPhone
+          path: TCL-Remote.ipa
