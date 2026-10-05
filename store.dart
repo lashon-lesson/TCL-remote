@@ -7,11 +7,13 @@ class TvDevice {
   String name;
   String host;
   bool paired;
-  TvDevice({required this.id, required this.name, required this.host, this.paired = false});
+  String? mac; // להדלקה דרך הרשת
+  TvDevice({required this.id, required this.name, required this.host, this.paired = false, this.mac});
 
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'host': host, 'paired': paired};
+  Map<String, dynamic> toJson() =>
+      {'id': id, 'name': name, 'host': host, 'paired': paired, 'mac': mac};
   factory TvDevice.fromJson(Map<String, dynamic> j) => TvDevice(
-      id: j['id'], name: j['name'], host: j['host'], paired: j['paired'] == true);
+      id: j['id'], name: j['name'], host: j['host'], paired: j['paired'] == true, mac: j['mac']);
 }
 
 class AppButton {
@@ -33,7 +35,7 @@ List<AppButton> defaultApps() => [
       AppButton('freetv', 'FreeTV', 0xFFFF8A1F, ''),
       AppButton('cellcom', 'Cellcom tv', 0xFFB07CFF, ''),
       AppButton('youtube', 'YouTube', 0xFFFF3B3B, 'com.google.android.youtube.tv'),
-      AppButton('netflix', 'Netflix', 0xFFE50914, 'com.netflix.ninja'),
+      AppButton('spotify', 'Spotify', 0xFF1ED760, 'com.spotify.tv.android'),
     ];
 
 class Store {

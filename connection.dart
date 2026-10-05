@@ -27,6 +27,11 @@ class TvConnection extends ChangeNotifier {
   bool? muted;
   int? volume;
   int? volumeMax;
+  String? currentApp; // האפליקציה שפתוחה כרגע בטלוויזיה
+  bool _appReported = false;
+  bool imeActive = false; // הטלוויזיה דיווחה על שדה הקלדה
+  int _imeCounter = 0;
+  int _fieldCounter = 0;
 
   SecureSocket? _remote;
   SecureSocket? _pair;
@@ -103,6 +108,32 @@ class TvConnection extends ChangeNotifier {
     } else if (f.has(8)) {
       final ping = f.msg(8);
       _send(Pb().msg(9, Pb().int32(1, ping?.int32(1) ?? 0)));
+    } else if (f.has(20)) {
+      final inject = f.msg(20);
+      final app = inject?.msg(1);
+      final field = inject?.msg(2);
+      if (app != null) _imeCounter = app.int32(1, _imeCounter);
+      if (field != null) {
+        _fieldCounter = field.int32(1, _fieldCounter);
+        imeActive = true;
+      }
+      final pkg = app?.str(12);
+      if (pkg != null && pkg.isNotEmpty) {
+        currentApp = pkg;
+        _appReported = true;
+      }
+      notifyListeners();
+    } else if (f.has(21)) {
+      final b = f.msg(21)!;
+      _imeCounter = b.int32(1, _imeCounter);
+      _fieldCounter = b.int32(2, _fieldCounter);
+      imeActive = true;
+      notifyListeners();
+    } else if (f.has(22)) {
+      final field = f.msg(22)?.msg(2);
+      if (field != null) _fieldCounter = field.int32(1, _fieldCounter);
+      imeActive = true;
+      notifyListeners();
     } else if (f.has(40)) {
       powered = f.msg(40)?.int32(1) == 1;
       notifyListeners();
@@ -153,7 +184,73 @@ class TvConnection extends ChangeNotifier {
   void sendKey(int code, {int direction = 3}) =>
       _send(Pb().msg(10, Pb().int32(1, code).int32(2, direction)));
 
+  /// כותב טקסט ישירות לשדה שפתוח בטלוויזיה (מחליף את התוכן שבו). תומך בעברית
+  void sendImeText(String text) {
+    if (text.isEmpty) return;
+    final pos = text.length - 1;
+    _send(Pb().msg(
+        21,
+        Pb().int32(1, _imeCounter).int32(2, _fieldCounter).msg(
+            3,
+            Pb().int32(1, 1).msg(
+                2, Pb().int32(1, pos).int32(2, pos).str(3, text)))));
+  }
+
+  /// הדלקה/כיבוי: אם מחובר – מקש הפעלה; אחרת – הדלקה דרך הרשת (Wake-on-LAN)
+  Future<String> power() async {
+    if (isReady) {
+      sendKey(26);
+      return powered == false ? 'on' : 'toggle';
+    }
+    final mac = tv.mac;
+    if (mac == null) return 'nomac';
+    final ok = await wakeOnLan(mac, tv.host);
+    for (final s in [3, 6, 10, 15, 25]) {
+      Timer(Duration(seconds: s), () {
+        if (!_disposed && !isReady && status != TvStatus.pairing) connect();
+      });
+    }
+    return ok ? 'waking' : 'failed';
+  }
+
   void sendAppLink(String link) => _send(Pb().msg(90, Pb().str(1, link)));
+
+  static const _knownLinks = {
+    'com.google.android.youtube.tv': ['https://www.youtube.com'],
+    'com.netflix.ninja': ['https://www.netflix.com/title'],
+    'com.spotify.tv.android': ['spotify://'],
+    'com.amazon.amazonvideo.livingroom': ['https://app.primevideo.com'],
+    'com.disney.disneyplus': ['https://www.disneyplus.com'],
+  };
+
+  /// דרכים שונות לפתוח אפליקציה – מהאמינה ביותר והלאה
+  static List<String> launchLinks(String pkg) {
+    if (pkg.contains('://') || pkg.startsWith('intent:')) return [pkg];
+    return [
+      ...?_knownLinks[pkg],
+      'intent:#Intent;action=android.intent.action.MAIN;'
+          'category=android.intent.category.LEANBACK_LAUNCHER;package=$pkg;end',
+      'market://launch?id=$pkg',
+    ];
+  }
+
+  /// פותח אפליקציה ומוודא שנפתחה. true = נפתחה, false = לא, null = אי אפשר לדעת
+  Future<bool?> launchApp(String pkg) async {
+    if (currentApp == pkg) return true;
+    final links = launchLinks(pkg);
+    for (var i = 0; i < links.length; i++) {
+      if (!isReady) return false;
+      sendAppLink(links[i]);
+      // מחכים לדיווח מהטלוויזיה על האפליקציה שנפתחה
+      for (var t = 0; t < 15; t++) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (currentApp == pkg) return true;
+      }
+      // אם הטלוויזיה לא מדווחת בכלל על אפליקציות – לא ממשיכים לנחש
+      if (!_appReported) return null;
+    }
+    return _appReported ? false : null;
+  }
 
   // ---------- צימוד ----------
 
@@ -276,4 +373,38 @@ class TvConnection extends ChangeNotifier {
     _closeSockets();
     super.dispose();
   }
+}
+
+/// שליחת "חבילת קסם" להדלקת הטלוויזיה (Wake-on-LAN)
+Future<bool> wakeOnLan(String mac, String host) async {
+  final parts = mac.split(RegExp('[:-]'));
+  if (parts.length != 6) return false;
+  final m = parts.map((h) => int.parse(h, radix: 16)).toList();
+  final packet = <int>[...List.filled(6, 0xff), for (var i = 0; i < 16; i++) ...m];
+  final p = host.split('.');
+  final targets = <String>[
+    '255.255.255.255',
+    if (p.length == 4) '${p[0]}.${p[1]}.${p[2]}.255',
+    host,
+  ];
+  var sent = false;
+  RawDatagramSocket? sock;
+  try {
+    sock = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+    sock.broadcastEnabled = true;
+    for (var round = 0; round < 3; round++) {
+      for (final t in targets) {
+        for (final port in [9, 7]) {
+          try {
+            if (sock.send(packet, InternetAddress(t), port) > 0) sent = true;
+          } catch (_) {}
+        }
+      }
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+  } catch (_) {
+  } finally {
+    sock?.close();
+  }
+  return sent;
 }

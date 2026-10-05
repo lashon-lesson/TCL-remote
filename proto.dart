@@ -6,10 +6,10 @@ class Pb {
   final _b = BytesBuilder();
 
   void _varint(int v) {
-    var x = v;
-    while (x >= 0x80) {
+    var x = v; // מספרים שליליים מקודדים כ-64 ביט, כמו ב-protobuf
+    while ((x & ~0x7f) != 0) {
       _b.addByte((x & 0x7f) | 0x80);
-      x >>= 7;
+      x = x >>> 7;
     }
     _b.addByte(x);
   }
@@ -51,6 +51,11 @@ class PbFields {
   int int32(int field, [int def = 0]) {
     final v = _f[field]?.first;
     return v is int ? v : def;
+  }
+
+  String? str(int field) {
+    final v = _f[field]?.first;
+    return v is Uint8List ? utf8.decode(v, allowMalformed: true) : null;
   }
 
   PbFields? msg(int field) {

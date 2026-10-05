@@ -8,7 +8,9 @@ class K {
   static const slash = 76, at = 77, plus = 81;
   static const menu = 82, search = 84, playPause = 85;
   static const mute = 164, chUp = 166, chDown = 167;
-  static const settings = 176, input = 178;
+  static const settings = 176, input = 178, tv = 170;
+
+  static int hdmi(int n) => 242 + n; // HDMI 1–4 = 243–246
 
   static int digit(int d) => 7 + d;
 

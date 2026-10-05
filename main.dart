@@ -188,7 +188,32 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     c.sendKey(code);
   }
 
-  void _launch(AppButton a) {
+  Future<void> _power() async {
+    final c = cur;
+    if (c == null) {
+      _need();
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    final r = await c.power();
+    if (!mounted) return;
+    switch (r) {
+      case 'on':
+        _toast('מדליק את ${c.tv.name}…');
+        break;
+      case 'waking':
+        _toast('שולח פקודת הדלקה ל${c.tv.name}…');
+        break;
+      case 'failed':
+        _toast('לא הצלחתי לשלוח פקודת הדלקה');
+        break;
+      case 'nomac':
+        _toast('הטלוויזיה לא מחוברת. להדלקה מכיבוי מלא: TCL ← ⋮ ← כתובת MAC להדלקה');
+        break;
+    }
+  }
+
+  Future<void> _launch(AppButton a) async {
     if (a.package.isEmpty) {
       _editApp(a);
       return;
@@ -196,8 +221,12 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     final c = _need();
     if (c == null) return;
     HapticFeedback.lightImpact();
-    c.sendAppLink(a.link);
-    _toast('פותח את ${a.label}');
+    _toast('פותח את ${a.label}…');
+    final ok = await c.launchApp(a.package);
+    if (!mounted) return;
+    if (ok == false) {
+      _toast('${a.label} לא נפתח. פתח אותו פעם אחת בשלט הרגיל, ואז לחיצה ארוכה על הכפתור ← "השתמש באפליקציה שפתוחה עכשיו"');
+    }
   }
 
   // ---------- חלונות ----------
@@ -239,6 +268,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
       List<TextInputFormatter>? formatters,
       TextCapitalization caps = TextCapitalization.none,
       bool autofocus = false,
+      ValueChanged<String>? onChanged,
       ValueChanged<String>? onSubmit}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -254,6 +284,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         autocorrect: false,
         enableSuggestions: false,
         onSubmitted: onSubmit,
+        onChanged: onChanged,
         style: style ?? const TextStyle(fontSize: 16),
         decoration: InputDecoration(
           hintText: hint,
@@ -453,6 +484,8 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
                   _pairPromptFor = null;
                   _select(tv.id);
                   c?.startPairing();
+                } else if (v == 'mac') {
+                  _editMac(tv);
                 } else if (v == 'del') {
                   final ok = await showDialog<bool>(
                     context: ctx,
@@ -476,6 +509,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
               itemBuilder: (_) => const [
                 PopupMenuItem(value: 're', child: Text('חבר מחדש')),
                 PopupMenuItem(value: 'pair', child: Text('צמד מחדש')),
+                PopupMenuItem(value: 'mac', child: Text('כתובת MAC להדלקה')),
                 PopupMenuItem(value: 'del', child: Text('מחק')),
               ],
             ),
@@ -527,6 +561,80 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     });
   }
 
+  void _editMac(TvDevice tv) {
+    final mac = TextEditingController(text: tv.mac ?? '');
+    _sheet((ctx, setS) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _title('כתובת MAC של ${tv.name}'),
+          _hint('נדרשת רק כדי להדליק טלוויזיה שכבויה לגמרי. בטלוויזיה: הגדרות ← רשת ואינטרנט ← הרשת המחוברת (או: הגדרות ← מערכת ← מידע ← סטטוס) ← "כתובת MAC" של ה-WiFi.'),
+          _field(mac, hint: 'AA:BB:CC:DD:EE:FF', ltr: true, caps: TextCapitalization.characters),
+          _primary('שמור', () {
+            final v = mac.text.trim().toUpperCase().replaceAll('-', ':');
+            if (v.isNotEmpty && !RegExp(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$').hasMatch(v)) {
+              _toast('כתובת MAC לא תקינה');
+              return;
+            }
+            tv.mac = v.isEmpty ? null : v;
+            store!.saveTvs(tvs);
+            Navigator.pop(ctx);
+            _toast('נשמר');
+          }),
+          _ghost('ביטול', () => Navigator.pop(ctx)),
+        ]));
+  }
+
+  void _showInputs() {
+    if (_need() == null) return;
+    Widget tile(String label, String sub, IconData icon, VoidCallback onTap) => Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: ListTile(
+            tileColor: const Color(0xFF24252B),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            leading: Icon(icon, color: C.text),
+            title: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+            subtitle: Text(sub, style: const TextStyle(color: C.muted, fontSize: 12)),
+            onTap: onTap,
+          ),
+        );
+
+    _sheet((ctx, setS) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _title('מקור קלט'),
+          _hint('מעבר ישיר לכניסה, או פתיחת תפריט המקורות של הטלוויזיה.'),
+          Row(children: [
+            for (var n = 1; n <= 4; n++) ...[
+              if (n > 1) const SizedBox(width: 8),
+              Expanded(
+                child: Press(
+                  fireOnDown: true,
+                  onPress: () {
+                    _key(K.hdmi(n));
+                    Navigator.pop(ctx);
+                    _toast('עובר ל-HDMI $n');
+                  },
+                  height: 64,
+                  decoration: BoxDecoration(color: C.btn, borderRadius: BorderRadius.circular(14)),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    const Text('HDMI',
+                        style: TextStyle(color: C.muted, fontSize: 11, fontWeight: FontWeight.w700)),
+                    Text('$n', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                  ]),
+                ),
+              ),
+            ],
+          ]),
+          const SizedBox(height: 14),
+          tile('תפריט מקורות', 'רשימת כל הכניסות של הטלוויזיה – בוחרים עם החיצים ו-OK',
+              Icons.list, () {
+            _key(K.input);
+            Navigator.pop(ctx);
+          }),
+          tile('חזרה לטלוויזיה החכמה', 'מסך הבית של Google TV', Icons.home_outlined, () {
+            _key(K.home);
+            Navigator.pop(ctx);
+          }),
+          _ghost('סגור', () => Navigator.pop(ctx)),
+        ]));
+  }
+
   void _showNumpad() {
     _sheet((ctx, setS) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _title('מספרים'),
@@ -561,8 +669,19 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
 
   void _showKeyboard() {
     final text = TextEditingController();
+    Timer? debounce;
+
     _sheet((ctx, setS) {
-      Future<void> send() async {
+      void live(String v) {
+        debounce?.cancel();
+        debounce = Timer(const Duration(milliseconds: 180), () {
+          final c = cur;
+          if (c == null || !c.isReady || v.isEmpty) return;
+          c.sendImeText(v);
+        });
+      }
+
+      Future<void> asKeys() async {
         final c = _need();
         if (c == null || text.text.isEmpty) return;
         final skipped = <String>{};
@@ -575,42 +694,105 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
           c.sendKey(k);
           await Future.delayed(const Duration(milliseconds: 60));
         }
-        text.clear();
-        _toast(skipped.isEmpty ? 'נשלח' : 'נשלח. תווים שלא נתמכים: ${skipped.join()}');
+        _toast(skipped.isEmpty ? 'נשלח' : 'נשלח. תווים שלא נתמכים בשיטה הזו: ${skipped.join()}');
       }
 
-      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        _title('הקלדה בטלוויזיה'),
-        _hint('קודם בחר בטלוויזיה שדה חיפוש. נשלחות אותיות באנגלית, ספרות וסימנים בסיסיים.'),
-        _field(text, hint: 'טקסט לשליחה', ltr: true, autofocus: true, onSubmit: (_) => send()),
-        Row(children: [
-          Expanded(child: _primary('שלח', send)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: SizedBox(
-              height: 46,
-              child: TextButton(
-                style: TextButton.styleFrom(
-                    backgroundColor: C.btn,
-                    foregroundColor: C.text,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                onPressed: () => _key(K.del),
-                child: const Text('⌫ מחק תו'),
+      final c = cur;
+      return ListenableBuilder(
+        listenable: c ?? ValueNotifier(0),
+        builder: (ctx, _) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _title('הקלדה בטלוויזיה'),
+          _hint('בטלוויזיה עמוד על שדה החיפוש (ביוטיוב, בנטפליקס או בכל אפליקציה) ולחץ OK, כך שהמקלדת של הטלוויזיה תופיע. מה שתקליד כאן יופיע שם מיד, גם בעברית.'),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(children: [
+              StatusDot(c?.imeActive == true ? TvStatus.ready : TvStatus.connecting),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                    c?.imeActive == true
+                        ? 'שדה ההקלדה בטלוויזיה מחובר'
+                        : 'ממתין לשדה הקלדה בטלוויזיה…',
+                    style: const TextStyle(color: C.muted, fontSize: 12.5)),
+              ),
+            ]),
+          ),
+          _field(text,
+              hint: 'מה לחפש?',
+              autofocus: true,
+              onChanged: live,
+              onSubmit: (_) => _key(K.enter)),
+          Row(children: [
+            Expanded(flex: 2, child: _primary('חפש ↵', () => _key(K.enter))),
+            const SizedBox(width: 8),
+            Expanded(
+              child: SizedBox(
+                height: 46,
+                child: TextButton(
+                  style: TextButton.styleFrom(
+                      backgroundColor: C.btn,
+                      foregroundColor: C.text,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                  onPressed: () {
+                    final v = text.text;
+                    if (v.isEmpty) {
+                      _key(K.del);
+                      return;
+                    }
+                    final nv = v.characters.skipLast(1).toString();
+                    text.text = nv;
+                    if (nv.isEmpty) {
+                      _key(K.del);
+                    } else {
+                      live(nv);
+                    }
+                  },
+                  child: const Text('⌫ מחק'),
+                ),
               ),
             ),
+          ]),
+          const SizedBox(height: 6),
+          TextButton(
+            onPressed: asKeys,
+            child: const Text('הטקסט לא מופיע? שלח כמקשים (אנגלית בלבד)',
+                style: TextStyle(color: C.muted, fontSize: 12.5)),
           ),
+          _ghost('סגור', () {
+            debounce?.cancel();
+            Navigator.pop(ctx);
+          }),
         ]),
-        _ghost('סגור', () => Navigator.pop(ctx)),
-      ]);
+      );
     });
   }
 
   void _editApp(AppButton a) {
     final pkg = TextEditingController(text: a.package);
     final label = TextEditingController(text: a.label);
+    final open = cur?.currentApp;
     _sheet((ctx, setS) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _title('הגדרת ${a.label}'),
-          _hint('הדבק את מזהה האפליקציה מ-Google Play: מחפשים את האפליקציה ב-play.google.com ומעתיקים מכתובת הדף את מה שמופיע אחרי id='),
+          _hint('הדרך הקלה: פתח את האפליקציה בטלוויזיה עם השלט הרגיל, ואז לחץ כאן על "השתמש באפליקציה שפתוחה עכשיו".'),
+          if (open != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: SizedBox(
+                height: 46,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                      foregroundColor: C.green,
+                      side: const BorderSide(color: C.green),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                  onPressed: () => setS(() => pkg.text = open),
+                  icon: const Icon(Icons.tv, size: 20),
+                  label: Text('השתמש באפליקציה שפתוחה עכשיו ($open)',
+                      overflow: TextOverflow.ellipsis),
+                ),
+              ),
+            )
+          else
+            _hint('(כרגע הטלוויזיה לא דיווחה איזו אפליקציה פתוחה. פתח אפליקציה בטלוויזיה וחזור לכאן.)'),
           _field(label, hint: 'שם הכפתור'),
           _field(pkg, hint: 'com.example.app', ltr: true),
           _primary('שמור', () {
@@ -690,23 +872,30 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
                 ),
               ),
             ),
-            _round(Icons.unfold_more, () => _key(K.input), 'מקור'),
+            _round(Icons.input, _showInputs, 'מקור קלט'),
             const SizedBox(width: 10),
-            _round(Icons.volume_up_outlined, () => _key(K.settings), 'הגדרות'),
+            _round(Icons.settings_outlined, () => _key(K.settings), 'הגדרות'),
             const SizedBox(width: 10),
             Press(
               semantics: 'הדלקה וכיבוי',
               fireOnDown: true,
-              onPress: () => _key(K.power),
+              onPress: _power,
               width: 44,
               height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFF123526),
-                border: Border.all(color: const Color(0xFF1D6B4A)),
-                boxShadow: const [BoxShadow(color: Color(0x5922D38A), blurRadius: 16)],
-              ),
-              child: const Icon(Icons.bolt, color: C.green, size: 20),
+              decoration: c?.isReady == true && c?.powered != false
+                  ? BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFF123526),
+                      border: Border.all(color: const Color(0xFF1D6B4A)),
+                      boxShadow: const [BoxShadow(color: Color(0x5922D38A), blurRadius: 16)],
+                    )
+                  : BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: C.btn,
+                      border: Border.all(color: C.line),
+                    ),
+              child: Icon(Icons.power_settings_new,
+                  color: c?.isReady == true && c?.powered != false ? C.green : C.muted, size: 20),
             ),
           ]),
           const SizedBox(height: 22),
