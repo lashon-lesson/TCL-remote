@@ -32,8 +32,8 @@ class AppButton {
 }
 
 List<AppButton> defaultApps() => [
-      AppButton('freetv', 'FreeTV', 0xFFFF8A1F, ''),
-      AppButton('cellcom', 'Cellcom tv', 0xFFB07CFF, ''),
+      AppButton('freetv', 'FreeTV', 0xFFFF8A1F, 'tv.freetv.androidtv'),
+      AppButton('spotify', 'Spotify', 0xFF1ED760, 'com.spotify.tv.android'),
       AppButton('youtube', 'YouTube', 0xFFFF3B3B, 'com.google.android.youtube.tv'),
       AppButton('netflix', 'Netflix', 0xFFE50914, 'com.netflix.ninja'),
     ];
@@ -55,12 +55,37 @@ class Store {
     final s = prefs.getString('apps');
     if (s == null) return defaultApps();
     final list = (jsonDecode(s) as List).map((e) => AppButton.fromJson(e)).toList();
-    // מחליפים את Spotify הישן ב-Netflix
+    if (prefs.getBool('apps_v2') == true) return _v3(list);
+    // עדכון חד-פעמי של הגדרות ישנות
     for (var i = 0; i < list.length; i++) {
-      if (list[i].id == 'spotify' && list[i].package == 'com.spotify.tv.android') {
+      final a = list[i];
+      // מחליפים את Spotify הישן ב-Netflix
+      if (a.id == 'spotify' && a.package == 'com.spotify.tv.android') {
         list[i] = AppButton('netflix', 'Netflix', 0xFFE50914, 'com.netflix.ninja');
       }
+      // מזהים נכונים ל-FreeTV ולסלקום (מחליפים ניסיונות קודמים)
+      if (a.id == 'freetv' && (a.package.isEmpty || a.package.contains('freetv'))) {
+        a.package = 'tv.freetv.androidtv';
+      }
+      if (a.id == 'cellcom' && (a.package.isEmpty || a.package.contains('cellcom'))) {
+        a.package = 'com.cellcom.cellcom_tv';
+      }
     }
+    saveApps(list);
+    prefs.setBool('apps_v2', true);
+    return _v3(list);
+  }
+
+  /// עדכון חד-פעמי: Cellcom tv מוחלף ב-Spotify
+  List<AppButton> _v3(List<AppButton> list) {
+    if (prefs.getBool('apps_v3') == true) return list;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id == 'cellcom') {
+        list[i] = AppButton('spotify', 'Spotify', 0xFF1ED760, 'com.spotify.tv.android');
+      }
+    }
+    saveApps(list);
+    prefs.setBool('apps_v3', true);
     return list;
   }
 

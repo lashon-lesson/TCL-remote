@@ -239,46 +239,26 @@ class TvConnection extends ChangeNotifier {
   static const _knownLinks = {
     'com.google.android.youtube.tv': ['https://www.youtube.com'],
     'com.netflix.ninja': ['https://www.netflix.com/title'],
-    'com.spotify.tv.android': ['spotify://'],
     'com.amazon.amazonvideo.livingroom': ['https://app.primevideo.com'],
     'com.disney.disneyplus': ['https://www.disneyplus.com'],
   };
 
-  /// דרכים שונות לפתוח אפליקציה לפי שם החבילה – כולן פותחות את אותה אפליקציה בלבד
-  static List<String> launchLinks(String pkg) {
-    if (pkg.contains('://') || pkg.startsWith('intent:')) return [pkg];
-    return [
-      ...?_knownLinks[pkg],
-      'android-app://$pkg',
-      'intent:#Intent;action=android.intent.action.MAIN;'
-          'category=android.intent.category.LEANBACK_LAUNCHER;package=$pkg;end',
-      'intent:#Intent;action=android.intent.action.MAIN;'
-          'category=android.intent.category.LAUNCHER;package=$pkg;end',
-      'market://launch?id=$pkg',
-    ];
-  }
-
-  Future<bool> _waitForApp(String pkg, int ms) async {
-    for (var t = 0; t < ms ~/ 200; t++) {
-      await Future.delayed(const Duration(milliseconds: 200));
-      if (currentApp == pkg) return true;
+  /// פותח אפליקציה. 'link' – נפתחה ישירות, 'store' – נפתח דף האפליקציה בחנות
+  String launchApp(String pkg) {
+    if (pkg.contains('://') || pkg.startsWith('intent:')) {
+      sendAppLink(pkg);
+      return 'link';
     }
-    return false;
-  }
-
-  /// פותח אפליקציה. מחזיר: 'ok' נפתחה, 'store' נפתח דף החנות, 'unknown' לא ידוע, 'fail'
-  Future<String> launchApp(String pkg) async {
-    if (currentApp == pkg) return 'ok';
-    for (final link in launchLinks(pkg)) {
-      if (!isReady) return 'fail';
-      sendAppLink(link);
-      if (await _waitForApp(pkg, _appReported ? 2500 : 1200)) return 'ok';
+    final known = _knownLinks[pkg];
+    if (known != null) {
+      sendAppLink(known.first);
+      return 'link';
     }
-    if (!_appReported) return 'unknown'; // אי אפשר לדעת אם נפתחה – לא פותחים את החנות מעליה
-    if (pkg.contains('://') || pkg.startsWith('intent:')) return 'fail';
-    // מוצא אחרון: דף האפליקציה ב-Google Play, עם כפתור "פתיחה"
+    // לאפליקציות בלי קישור ישיר: דף האפליקציה ב-Google Play, ואז לחיצה על "פתיחה"
     sendAppLink('https://play.google.com/store/apps/details?id=$pkg');
-    if (await _waitForApp(pkg, 1500)) return 'ok';
+    Timer(const Duration(milliseconds: 4000), () {
+      if (isReady) sendKey(23); // OK על הכפתור "פתיחה"
+    });
     return 'store';
   }
 
