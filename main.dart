@@ -202,13 +202,12 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         _toast('מדליק את ${c.tv.name}…');
         break;
       case 'waking':
-        _toast('שולח פקודת הדלקה ל${c.tv.name}…');
+        _toast('נשלחה פקודת הדלקה ל${c.tv.name}. אם לא נדלקה, ראה הוראות ההדלקה בהגדרות הטלוויזיה');
         break;
-      case 'failed':
-        _toast('לא הצלחתי לשלוח פקודת הדלקה');
-        break;
-      case 'nomac':
-        _toast('הטלוויזיה לא מחוברת. להדלקה מכיבוי מלא: TCL ← ⋮ ← כתובת MAC להדלקה');
+      case 'unreachable':
+        _toast(c.tv.mac == null
+            ? 'הטלוויזיה בכיבוי מלא ולא עונה. צריך להפעיל בה "המתנה ברשת" – או להזין כתובת MAC (TCL ← ⋮)'
+            : 'הטלוויזיה לא עונה. בדוק שהופעלה בה "המתנה ברשת"');
         break;
     }
   }
@@ -222,9 +221,11 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     if (c == null) return;
     HapticFeedback.lightImpact();
     _toast('פותח את ${a.label}…');
-    final ok = await c.launchApp(a.package);
+    final r = await c.launchApp(a.package);
     if (!mounted) return;
-    if (ok == false) {
+    if (r == 'store') {
+      _toast('נפתח דף האפליקציה בחנות – לחץ OK על "פתיחה". אם לא מופיע "פתיחה", מזהה האפליקציה שגוי');
+    } else if (r == 'fail') {
       _toast('${a.label} לא נפתח. פתח אותו פעם אחת בשלט הרגיל, ואז לחיצה ארוכה על הכפתור ← "השתמש באפליקציה שפתוחה עכשיו"');
     }
   }

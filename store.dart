@@ -35,7 +35,7 @@ List<AppButton> defaultApps() => [
       AppButton('freetv', 'FreeTV', 0xFFFF8A1F, ''),
       AppButton('cellcom', 'Cellcom tv', 0xFFB07CFF, ''),
       AppButton('youtube', 'YouTube', 0xFFFF3B3B, 'com.google.android.youtube.tv'),
-      AppButton('spotify', 'Spotify', 0xFF1ED760, 'com.spotify.tv.android'),
+      AppButton('netflix', 'Netflix', 0xFFE50914, 'com.netflix.ninja'),
     ];
 
 class Store {
@@ -54,7 +54,14 @@ class Store {
   List<AppButton> loadApps() {
     final s = prefs.getString('apps');
     if (s == null) return defaultApps();
-    return (jsonDecode(s) as List).map((e) => AppButton.fromJson(e)).toList();
+    final list = (jsonDecode(s) as List).map((e) => AppButton.fromJson(e)).toList();
+    // מחליפים את Spotify הישן ב-Netflix
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id == 'spotify' && list[i].package == 'com.spotify.tv.android') {
+        list[i] = AppButton('netflix', 'Netflix', 0xFFE50914, 'com.netflix.ninja');
+      }
+    }
+    return list;
   }
 
   Future<void> saveApps(List<AppButton> apps) =>

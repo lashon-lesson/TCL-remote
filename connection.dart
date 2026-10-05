@@ -196,21 +196,42 @@ class TvConnection extends ChangeNotifier {
                 2, Pb().int32(1, pos).int32(2, pos).str(3, text)))));
   }
 
-  /// הדלקה/כיבוי: אם מחובר – מקש הפעלה; אחרת – הדלקה דרך הרשת (Wake-on-LAN)
+  /// הדלקה/כיבוי
+  /// 'off' – נשלח כיבוי, 'on' – נשלחה הדלקה, 'waking' – נשלח Wake-on-LAN, 'unreachable' – אין קשר
   Future<String> power() async {
     if (isReady) {
+      if (powered == false) {
+        sendKey(224); // WAKEUP – מדליק בלי סיכון לכבות
+        return 'on';
+      }
       sendKey(26);
-      return powered == false ? 'on' : 'toggle';
+      return 'off';
     }
+
+    // לא מחובר: מנסים להעיר ולהתחבר מחדש
+    var wol = false;
     final mac = tv.mac;
-    if (mac == null) return 'nomac';
-    final ok = await wakeOnLan(mac, tv.host);
-    for (final s in [3, 6, 10, 15, 25]) {
-      Timer(Duration(seconds: s), () {
-        if (!_disposed && !isReady && status != TvStatus.pairing) connect();
-      });
+    if (mac != null) wol = await wakeOnLan(mac, tv.host);
+    _fails = 0;
+    connect();
+    for (var t = 0; t < 40; t++) {
+      await Future.delayed(const Duration(milliseconds: 250));
+      if (_disposed) return 'unreachable';
+      if (isReady) {
+        await Future.delayed(const Duration(milliseconds: 400));
+        sendKey(224);
+        return 'on';
+      }
     }
-    return ok ? 'waking' : 'failed';
+    if (wol) {
+      for (final s in [5, 10, 20, 30]) {
+        Timer(Duration(seconds: s), () {
+          if (!_disposed && !isReady && status != TvStatus.pairing) connect();
+        });
+      }
+      return 'waking';
+    }
+    return 'unreachable';
   }
 
   void sendAppLink(String link) => _send(Pb().msg(90, Pb().str(1, link)));
@@ -223,33 +244,42 @@ class TvConnection extends ChangeNotifier {
     'com.disney.disneyplus': ['https://www.disneyplus.com'],
   };
 
-  /// דרכים שונות לפתוח אפליקציה – מהאמינה ביותר והלאה
+  /// דרכים שונות לפתוח אפליקציה לפי שם החבילה – כולן פותחות את אותה אפליקציה בלבד
   static List<String> launchLinks(String pkg) {
     if (pkg.contains('://') || pkg.startsWith('intent:')) return [pkg];
     return [
       ...?_knownLinks[pkg],
+      'android-app://$pkg',
       'intent:#Intent;action=android.intent.action.MAIN;'
           'category=android.intent.category.LEANBACK_LAUNCHER;package=$pkg;end',
+      'intent:#Intent;action=android.intent.action.MAIN;'
+          'category=android.intent.category.LAUNCHER;package=$pkg;end',
       'market://launch?id=$pkg',
     ];
   }
 
-  /// פותח אפליקציה ומוודא שנפתחה. true = נפתחה, false = לא, null = אי אפשר לדעת
-  Future<bool?> launchApp(String pkg) async {
-    if (currentApp == pkg) return true;
-    final links = launchLinks(pkg);
-    for (var i = 0; i < links.length; i++) {
-      if (!isReady) return false;
-      sendAppLink(links[i]);
-      // מחכים לדיווח מהטלוויזיה על האפליקציה שנפתחה
-      for (var t = 0; t < 15; t++) {
-        await Future.delayed(const Duration(milliseconds: 200));
-        if (currentApp == pkg) return true;
-      }
-      // אם הטלוויזיה לא מדווחת בכלל על אפליקציות – לא ממשיכים לנחש
-      if (!_appReported) return null;
+  Future<bool> _waitForApp(String pkg, int ms) async {
+    for (var t = 0; t < ms ~/ 200; t++) {
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (currentApp == pkg) return true;
     }
-    return _appReported ? false : null;
+    return false;
+  }
+
+  /// פותח אפליקציה. מחזיר: 'ok' נפתחה, 'store' נפתח דף החנות, 'unknown' לא ידוע, 'fail'
+  Future<String> launchApp(String pkg) async {
+    if (currentApp == pkg) return 'ok';
+    for (final link in launchLinks(pkg)) {
+      if (!isReady) return 'fail';
+      sendAppLink(link);
+      if (await _waitForApp(pkg, _appReported ? 2500 : 1200)) return 'ok';
+    }
+    if (!_appReported) return 'unknown'; // אי אפשר לדעת אם נפתחה – לא פותחים את החנות מעליה
+    if (pkg.contains('://') || pkg.startsWith('intent:')) return 'fail';
+    // מוצא אחרון: דף האפליקציה ב-Google Play, עם כפתור "פתיחה"
+    sendAppLink('https://play.google.com/store/apps/details?id=$pkg');
+    if (await _waitForApp(pkg, 1500)) return 'ok';
+    return 'store';
   }
 
   // ---------- צימוד ----------
