@@ -13,27 +13,40 @@ class Identity {
   final String keyPem;
   final BigInt n;
   final BigInt e;
-  Identity._(this.certPem, this.keyPem, this.n, this.e);
+  final String deviceId; // מזהה ייחודי לטלפון הזה
+  final bool regenerated; // נוצרה זהות חדשה – צריך לצמד מחדש
+  Identity._(this.certPem, this.keyPem, this.n, this.e, this.deviceId, this.regenerated);
 
   static const _kCert = 'identity_cert';
   static const _kKey = 'identity_key';
+  static const _kId = 'identity_device_id';
+  static const _kVer = 'identity_version';
 
   static Future<Identity> loadOrCreate(SharedPreferences prefs) async {
     var cert = prefs.getString(_kCert);
     var key = prefs.getString(_kKey);
-    if (cert == null || key == null) {
-      final r = await Isolate.run(_generate);
+    var id = prefs.getString(_kId);
+    var regenerated = false;
+    // גרסה 2: לכל טלפון שם ייחודי, כדי שכמה טלפונים יוכלו לעבוד מול אותה טלוויזיה
+    if (cert == null || key == null || id == null || prefs.getInt(_kVer) != 2) {
+      final rnd = Random.secure();
+      final newId = List.generate(6, (_) => rnd.nextInt(16).toRadixString(16)).join().toUpperCase();
+      final r = await Isolate.run(() => _generate('atvremote-$newId'));
+      regenerated = cert != null;
       cert = r.cert;
       key = r.key;
+      id = newId;
       await prefs.setString(_kCert, cert);
       await prefs.setString(_kKey, key);
+      await prefs.setString(_kId, id);
+      await prefs.setInt(_kVer, 2);
     }
     final pub = rsaPublicFromCert(Der.fromPem(cert));
-    return Identity._(cert, key, pub.n, pub.e);
+    return Identity._(cert, key, pub.n, pub.e, id, regenerated);
   }
 }
 
-({String cert, String key}) _generate() {
+({String cert, String key}) _generate(String commonName) {
   final seed = Random.secure();
   final rnd = FortunaRandom()
     ..seed(KeyParameter(
@@ -70,7 +83,7 @@ class Identity {
       Der.seq([Der.oid([1, 2, 840, 113549, 1, 1, 11]), Der.nul()]);
   final name = Der.seq([
     Der.set([
-      Der.seq([Der.oid([2, 5, 4, 3]), Der.utf8Str('atvremote')])
+      Der.seq([Der.oid([2, 5, 4, 3]), Der.utf8Str(commonName)])
     ])
   ]);
   final now = DateTime.now().toUtc();

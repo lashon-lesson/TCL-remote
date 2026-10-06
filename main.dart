@@ -102,6 +102,13 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     apps = s.loadApps();
     sel = s.selected;
     final id = await Identity.loadOrCreate(prefs);
+    if (id.regenerated) {
+      // זהות חדשה לטלפון – צימוד אחד מחדש לכל טלוויזיה
+      for (final tv in tvs) {
+        tv.paired = false;
+      }
+      await s.saveTvs(tvs);
+    }
     if (!mounted) return;
     setState(() {
       store = s;
@@ -171,11 +178,14 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     if (!c.isReady) {
       if (c.status == TvStatus.pairing) {
         _showPairSheet(c);
-      } else {
-        _toast(c.status == TvStatus.connecting
-            ? 'מתחבר לטלוויזיה…'
-            : 'הטלוויזיה לא מחוברת. לחץ על TCL');
+        return null;
       }
+      if (c.canSend) {
+        // מתחבר מחדש ושולח את הפקודה ברגע שהחיבור מוכן
+        if (c.status != TvStatus.connecting) _toast('מתחבר לטלוויזיה…');
+        return c;
+      }
+      _toast('הטלוויזיה לא מחוברת. לחץ על TCL');
       return null;
     }
     return c;
@@ -212,7 +222,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _launch(AppButton a) async {
+  void _launch(AppButton a) {
     if (a.package.isEmpty) {
       _editApp(a);
       return;
@@ -220,14 +230,8 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     final c = _need();
     if (c == null) return;
     HapticFeedback.lightImpact();
-    _toast('פותח את ${a.label}…');
-    final r = await c.launchApp(a.package);
-    if (!mounted) return;
-    if (r == 'store') {
-      _toast('נפתח דף האפליקציה בחנות – לחץ OK על "פתיחה". אם לא מופיע "פתיחה", מזהה האפליקציה שגוי');
-    } else if (r == 'fail') {
-      _toast('${a.label} לא נפתח. פתח אותו פעם אחת בשלט הרגיל, ואז לחיצה ארוכה על הכפתור ← "השתמש באפליקציה שפתוחה עכשיו"');
-    }
+    final r = c.launchApp(a.package);
+    _toast(r == 'store' ? 'פותח את ${a.label} דרך החנות…' : 'פותח את ${a.label}…');
   }
 
   // ---------- חלונות ----------
@@ -771,29 +775,9 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
   void _editApp(AppButton a) {
     final pkg = TextEditingController(text: a.package);
     final label = TextEditingController(text: a.label);
-    final open = cur?.currentApp;
     _sheet((ctx, setS) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _title('הגדרת ${a.label}'),
-          _hint('הדרך הקלה: פתח את האפליקציה בטלוויזיה עם השלט הרגיל, ואז לחץ כאן על "השתמש באפליקציה שפתוחה עכשיו".'),
-          if (open != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: SizedBox(
-                height: 46,
-                child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                      foregroundColor: C.green,
-                      side: const BorderSide(color: C.green),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                  onPressed: () => setS(() => pkg.text = open),
-                  icon: const Icon(Icons.tv, size: 20),
-                  label: Text('השתמש באפליקציה שפתוחה עכשיו ($open)',
-                      overflow: TextOverflow.ellipsis),
-                ),
-              ),
-            )
-          else
-            _hint('(כרגע הטלוויזיה לא דיווחה איזו אפליקציה פתוחה. פתח אפליקציה בטלוויזיה וחזור לכאן.)'),
+          _hint('הזן את מזהה האפליקציה מ-Google Play: בטלפון פותחים את האפליקציה ב-Google Play ← ⋮ ← שיתוף ← העתקת קישור, ומעתיקים את מה שמופיע אחרי id='),
           _field(label, hint: 'שם הכפתור'),
           _field(pkg, hint: 'com.example.app', ltr: true),
           _primary('שמור', () {

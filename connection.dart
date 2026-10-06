@@ -90,12 +90,12 @@ class TvConnection extends ChangeNotifier {
     final f = PbFields.decode(m);
     if (f.has(1)) {
       // RemoteConfigure – מציגים את עצמנו
-      _send(Pb().msg(
+      _raw(Pb().msg(
           1,
           Pb().int32(1, 622).msg(
               2,
               Pb()
-                  .str(1, 'Phone')
+                  .str(1, 'Phone ${identity.deviceId}')
                   .str(2, 'TCL Remote')
                   .int32(3, 1)
                   .str(4, '1')
@@ -103,11 +103,12 @@ class TvConnection extends ChangeNotifier {
                   .str(6, '1.0.0'))));
       _fails = 0;
       _set(TvStatus.ready);
+      _flushPending();
     } else if (f.has(2)) {
-      _send(Pb().msg(2, Pb().int32(1, 622)));
+      _raw(Pb().msg(2, Pb().int32(1, 622)));
     } else if (f.has(8)) {
       final ping = f.msg(8);
-      _send(Pb().msg(9, Pb().int32(1, ping?.int32(1) ?? 0)));
+      _raw(Pb().msg(9, Pb().int32(1, ping?.int32(1) ?? 0)));
     } else if (f.has(20)) {
       final inject = f.msg(20);
       final app = inject?.msg(1);
@@ -151,13 +152,17 @@ class TvConnection extends ChangeNotifier {
     _remote = null;
     if (_disposed) return;
     final wasReady = status == TvStatus.ready;
-    final msg = '$e'.toLowerCase();
-    if (!wasReady &&
-        (e is TlsException || msg.contains('reset') || msg.contains('certificate'))) {
+    // רק דחיית התעודה פירושה שהטלוויזיה שכחה את הטלפון
+    if (!wasReady && (e is TlsException || '$e'.toLowerCase().contains('certificate'))) {
       _unpaired();
       return;
     }
-    _scheduleRetry(wasReady ? null : 'החיבור נסגר');
+    if (wasReady) {
+      // החיבור נסגר (למשל טלפון אחר התחבר) – מתחברים שוב רק כשמשתמשים בשלט
+      _set(TvStatus.offline);
+      return;
+    }
+    _scheduleRetry('החיבור נסגר');
   }
 
   void _unpaired() {
@@ -175,11 +180,45 @@ class TvConnection extends ChangeNotifier {
     _retry = Timer(Duration(seconds: secs), connect);
   }
 
-  void _send(Pb msg) {
+  /// הודעות פרוטוקול (תשובות לטלוויזיה) – נשלחות מיד, גם לפני שהחיבור מוכן
+  void _raw(Pb msg) {
     try {
       _remote?.add(msg.framed());
     } catch (_) {}
   }
+
+  final _pending = <({Uint8List data, DateTime at})>[];
+
+  void _send(Pb msg) {
+    final data = msg.framed();
+    if (isReady && _remote != null) {
+      try {
+        _remote!.add(data);
+        return;
+      } catch (_) {}
+    }
+    // לא מחובר כרגע: שומרים את הפקודה ומתחברים מחדש
+    if (_pending.length < 3) _pending.add((data: data, at: DateTime.now()));
+    if (status == TvStatus.offline || status == TvStatus.error) {
+      _fails = 0;
+      connect();
+    }
+  }
+
+  void _flushPending() {
+    final now = DateTime.now();
+    final items = List.of(_pending);
+    _pending.clear();
+    for (final p in items) {
+      if (now.difference(p.at).inSeconds > 6) continue;
+      try {
+        _remote?.add(p.data);
+      } catch (_) {}
+    }
+  }
+
+  /// אפשר לשלוח פקודות: מחובר, או שאפשר להתחבר מחדש אוטומטית
+  bool get canSend => tv.paired && status != TvStatus.pairing;
 
   void sendKey(int code, {int direction = 3}) =>
       _send(Pb().msg(10, Pb().int32(1, code).int32(2, direction)));
@@ -289,7 +328,7 @@ class TvConnection extends ChangeNotifier {
           onError: (_) => _onPairClosed(s),
           cancelOnError: true);
       s.add(_pairMsg()
-          .msg(10, Pb().str(1, 'atvremote').str(2, 'TCL Remote'))
+          .msg(10, Pb().str(1, 'atvremote').str(2, 'TCL Remote ${identity.deviceId}'))
           .framed());
     } catch (e) {
       _set(TvStatus.error,
