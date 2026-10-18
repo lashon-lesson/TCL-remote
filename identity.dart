@@ -31,7 +31,16 @@ class Identity {
     if (cert == null || key == null || id == null || prefs.getInt(_kVer) != 2) {
       final rnd = Random.secure();
       final newId = List.generate(6, (_) => rnd.nextInt(16).toRadixString(16)).join().toUpperCase();
-      final r = await Isolate.run(() => _generate('atvremote-$newId'));
+      final name = 'atvremote-$newId';
+      ({String cert, String key}) r;
+      try {
+        // החישוב רץ ברקע כדי שהמסך לא ייתקע
+        r = await Isolate.run(() => _generate(name)).timeout(const Duration(seconds: 60));
+      } catch (_) {
+        // אם הרקע לא עובד – מחשבים ישירות (המסך עלול לקפוא לכמה שניות)
+        await Future.delayed(const Duration(milliseconds: 300));
+        r = _generate(name);
+      }
       regenerated = cert != null;
       cert = r.cert;
       key = r.key;
@@ -54,7 +63,7 @@ class Identity {
 
   final gen = RSAKeyGenerator()
     ..init(ParametersWithRandom(
-        RSAKeyGeneratorParameters(BigInt.from(65537), 2048, 64), rnd));
+        RSAKeyGeneratorParameters(BigInt.from(65537), 2048, 12), rnd));
   final pair = gen.generateKeyPair();
   final pub = pair.publicKey as RSAPublicKey;
   final priv = pair.privateKey as RSAPrivateKey;

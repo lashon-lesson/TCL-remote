@@ -101,7 +101,30 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     }
   }
 
+  String? _initError;
+  int _initSecs = 0;
+  Timer? _initTimer;
+
   Future<void> _init() async {
+    _initTimer?.cancel();
+    _initSecs = 0;
+    _initError = null;
+    _initTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted || identity != null) {
+        t.cancel();
+        return;
+      }
+      setState(() => _initSecs++);
+    });
+    try {
+      await _initInner();
+    } catch (e) {
+      _initTimer?.cancel();
+      if (mounted) setState(() => _initError = '$e');
+    }
+  }
+
+  Future<void> _initInner() async {
     final prefs = await SharedPreferences.getInstance();
     final s = Store(prefs);
     tvs = s.loadTvs();
@@ -1185,12 +1208,35 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     return Scaffold(
       body: SafeArea(
         child: identity == null
-            ? const Center(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  CircularProgressIndicator(color: C.green),
-                  SizedBox(height: 16),
-                  Text('מכין את השלט…', style: TextStyle(color: C.muted)),
-                ]),
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: _initError != null
+                      ? Column(mainAxisSize: MainAxisSize.min, children: [
+                          const Icon(Icons.error_outline, color: C.red, size: 40),
+                          const SizedBox(height: 14),
+                          const Text('השלט לא הצליח לעלות',
+                              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 8),
+                          Text(_initError!,
+                              textAlign: TextAlign.center,
+                              textDirection: TextDirection.ltr,
+                              style: const TextStyle(color: C.muted, fontSize: 12)),
+                          const SizedBox(height: 18),
+                          _primary('נסה שוב', _init),
+                        ])
+                      : Column(mainAxisSize: MainAxisSize.min, children: [
+                          const CircularProgressIndicator(color: C.green),
+                          const SizedBox(height: 16),
+                          const Text('מכין את השלט…', style: TextStyle(color: C.muted)),
+                          if (_initSecs >= 3) ...[
+                            const SizedBox(height: 8),
+                            Text('פתיחה ראשונה: יוצר מפתח זיהוי לטלפון ($_initSecs שניות)',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Color(0xFF55585F), fontSize: 12)),
+                          ],
+                        ]),
+                ),
               )
             : Center(
                 child: SingleChildScrollView(
