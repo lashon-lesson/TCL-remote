@@ -4,11 +4,22 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
 jobs:
   android:
     runs-on: ubuntu-latest
+    env:
+      SHOREBIRD_TOKEN: ${{ secrets.SHOREBIRD_TOKEN }}
+      ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
     steps:
       - uses: actions/checkout@v4
+
       - name: Arrange files
         run: |
           mkdir -p lib/atv assets scripts
@@ -17,21 +28,91 @@ jobs:
           for f in icon.png icon_fg.png; do if [ -f $f ]; then mv $f assets/; fi; done
           if [ -f prepare.sh ]; then mv prepare.sh scripts/; fi
           rm -f build.yml download
+          # בלי shorebird.yaml (עדיין) מוציאים אותו מרשימת הקבצים
+          [ -f shorebird.yaml ] || perl -0pi -e 's/\n  assets:\n    - shorebird.yaml\n/\n/' pubspec.yaml
+          V=$(grep '^version:' pubspec.yaml | awk '{print $2}' | tr -d '\r')
+          printf "const appVersion = '%s';\nconst appBuild = %s;\n" "${V%%+*}" "${V##*+}" > lib/build_info.dart
+          echo "VERSION=$V" >> $GITHUB_ENV
+          echo "BUILD=${V##*+}" >> $GITHUB_ENV
+
+      - name: Signing key (same key for every build)
+        run: |
+          if [ -n "$ANDROID_KEYSTORE" ]; then
+            for d in "$HOME/.android" ${ANDROID_USER_HOME:+"$ANDROID_USER_HOME"}; do
+              mkdir -p "$d"
+              echo "$ANDROID_KEYSTORE" | base64 -d > "$d/debug.keystore"
+            done
+            echo "Fixed signing key installed"
+          else
+            echo "::warning::ANDROID_KEYSTORE secret is missing - the app cannot be updated over itself"
+          fi
+
       - uses: actions/setup-java@v4
         with:
           distribution: zulu
           java-version: '17'
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
+
+      - name: Setup Shorebird
+        if: env.SHOREBIRD_TOKEN != ''
+        uses: shorebirdtech/setup-shorebird@v1
+        with:
+          cache: true
+
       - run: bash scripts/prepare.sh
-      - run: flutter build apk --release
-      - run: cp build/app/outputs/flutter-apk/app-release.apk TCL-Remote.apk
+
+      - name: Create Shorebird app (first time only)
+        if: env.SHOREBIRD_TOKEN != '' && hashFiles('shorebird.yaml') == ''
+        run: |
+          shorebird init --display-name "TCL Remote"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add shorebird.yaml
+          git commit -m "Shorebird app id"
+          git push
+
+      - name: Build – automatic update (Shorebird)
+        if: env.SHOREBIRD_TOKEN != ''
+        run: |
+          if shorebird patch android --release-version="$VERSION" --allow-native-diffs --allow-asset-diffs; then
+            echo "KIND=patch" >> $GITHUB_ENV
+            echo "::notice::עדכון אוטומטי נשלח לטלפונים (גרסה $VERSION)"
+          else
+            echo "No release $VERSION yet - creating a full release"
+            shorebird release android --artifact apk
+            echo "KIND=release" >> $GITHUB_ENV
+          fi
+
+      - name: Build – plain Flutter (no Shorebird key)
+        if: env.SHOREBIRD_TOKEN == ''
+        run: |
+          flutter build apk --release
+          echo "KIND=release" >> $GITHUB_ENV
+
+      - name: Collect APK
+        if: env.KIND == 'release'
+        run: |
+          APK=$(find build/app/outputs -name '*release*.apk' | head -1)
+          cp "$APK" TCL-Remote.apk
+
       - uses: actions/upload-artifact@v4
+        if: env.KIND == 'release'
         with:
           name: TCL-Remote-Android
           path: TCL-Remote.apk
+
+      - name: Publish for the in-app updater
+        if: env.KIND == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: b${{ env.BUILD }}
+          name: גרסה ${{ env.VERSION }}
+          files: TCL-Remote.apk
+          make_latest: 'true'
 
   ios:
     runs-on: macos-latest
@@ -45,6 +126,9 @@ jobs:
           for f in icon.png icon_fg.png; do if [ -f $f ]; then mv $f assets/; fi; done
           if [ -f prepare.sh ]; then mv prepare.sh scripts/; fi
           rm -f build.yml download
+          [ -f shorebird.yaml ] || perl -0pi -e 's/\n  assets:\n    - shorebird.yaml\n/\n/' pubspec.yaml
+          V=$(grep '^version:' pubspec.yaml | awk '{print $2}' | tr -d '\r')
+          printf "const appVersion = '%s';\nconst appBuild = %s;\n" "${V%%+*}" "${V##*+}" > lib/build_info.dart
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
