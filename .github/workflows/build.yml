@@ -23,8 +23,12 @@ jobs:
       - name: Arrange files
         run: |
           mkdir -p lib/atv assets scripts
-          for f in connection der identity keys proto; do if [ -f $f.dart ]; then mv $f.dart lib/atv/; fi; done
-          for f in main store scanner; do if [ -f $f.dart ]; then mv $f.dart lib/; fi; done
+          for f in *.dart; do
+            case "$f" in
+              connection.dart|der.dart|identity.dart|keys.dart|proto.dart) mv "$f" lib/atv/ ;;
+              *) mv "$f" lib/ ;;
+            esac
+          done
           for f in icon.png icon_fg.png; do if [ -f $f ]; then mv $f assets/; fi; done
           if [ -f prepare.sh ]; then mv prepare.sh scripts/; fi
           rm -f build.yml download
@@ -121,8 +125,12 @@ jobs:
       - name: Arrange files
         run: |
           mkdir -p lib/atv assets scripts
-          for f in connection der identity keys proto; do if [ -f $f.dart ]; then mv $f.dart lib/atv/; fi; done
-          for f in main store scanner; do if [ -f $f.dart ]; then mv $f.dart lib/; fi; done
+          for f in *.dart; do
+            case "$f" in
+              connection.dart|der.dart|identity.dart|keys.dart|proto.dart) mv "$f" lib/atv/ ;;
+              *) mv "$f" lib/ ;;
+            esac
+          done
           for f in icon.png icon_fg.png; do if [ -f $f ]; then mv $f assets/; fi; done
           if [ -f prepare.sh ]; then mv prepare.sh scripts/; fi
           rm -f build.yml download
