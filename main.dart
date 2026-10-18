@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 
 import 'atv/connection.dart';
 import 'atv/identity.dart';
@@ -772,6 +773,303 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     });
   }
 
+  // ---------- פקודות קוליות ----------
+
+  final _stt = SpeechToText();
+  bool _sttReady = false;
+  String _heLocale = 'he_IL';
+  String _enLocale = 'en_US';
+  void Function(String)? _onSttStatus;
+  void Function(String)? _onSttError;
+
+  Future<bool> _initStt() async {
+    if (_sttReady) return true;
+    try {
+      _sttReady = await _stt.initialize(
+        onStatus: (s) => _onSttStatus?.call(s),
+        onError: (e) => _onSttError?.call(e.errorMsg),
+      );
+    } catch (_) {
+      _sttReady = false;
+    }
+    if (_sttReady) {
+      try {
+        final ls = await _stt.locales();
+        String? pick(String p) {
+          for (final l in ls) {
+            if (l.localeId.toLowerCase().replaceAll('-', '_').startsWith(p)) return l.localeId;
+          }
+          return null;
+        }
+
+        _heLocale = pick('he') ?? pick('iw') ?? 'he_IL';
+        _enLocale = pick('en_us') ?? pick('en') ?? 'en_US';
+      } catch (_) {}
+    }
+    return _sttReady;
+  }
+
+  AppButton _searchApp() => apps.firstWhere(
+        (a) => a.package == TvConnection.youtubePkg || a.id == 'youtube',
+        orElse: () => AppButton('youtube', 'YouTube', 0xFFFF3B3B, TvConnection.youtubePkg),
+      );
+
+  /// מבצע פקודה (מדוברת או מוקלדת) ומחזיר תיאור של מה שקרה
+  Future<String> _runVoice(String text, String ytMode) async {
+    final cmd = VoiceParser.parse(text, apps);
+    if (cmd.kind == VoiceKind.unknown) {
+      return 'לא הבנתי את הפקודה. נסה למשל: "פתח יוטיוב ומצא שיר של עומר אדם"';
+    }
+    final c = _need();
+    if (c == null) return 'הטלוויזיה לא מחוברת';
+    HapticFeedback.lightImpact();
+
+    switch (cmd.kind) {
+      case VoiceKind.openApp:
+        final a = cmd.app!;
+        if (a.package.isEmpty) return 'לכפתור ${a.label} עדיין לא הוגדרה אפליקציה';
+        if (!await c.waitReady()) return 'הטלוויזיה לא עונה';
+        c.launchApp(a.package);
+        return 'פותח את ${a.label}';
+
+      case VoiceKind.search:
+        final a = cmd.app ?? _searchApp();
+        if (a.package.isEmpty) return 'לכפתור ${a.label} עדיין לא הוגדרה אפליקציה';
+        final q = cmd.query!;
+        final r = await c.searchIn(a.package, q, preferLink: ytMode != 'type');
+        switch (r) {
+          case 'link':
+            return 'מחפש ב-${a.label}: "$q"\nאם נפתח רק היוטיוב בלי תוצאות, בחר למטה "הקלדה בחיפוש" ונסה שוב.';
+          case 'typed':
+            return 'חיפשתי ב-${a.label}: "$q"';
+          case 'no_field':
+            return '${a.label} נפתחה, אבל שדה החיפוש לא נפתח. נסה שוב, או השתמש ב-Keys.';
+          default:
+            return 'הטלוויזיה לא עונה';
+        }
+
+      case VoiceKind.key:
+        for (var i = 0; i < cmd.times; i++) {
+          c.sendKey(cmd.key);
+          await Future.delayed(const Duration(milliseconds: 130));
+        }
+        return cmd.label;
+
+      case VoiceKind.channel:
+        for (final d in cmd.digits!.split('')) {
+          c.sendKey(K.digit(int.parse(d)));
+          await Future.delayed(const Duration(milliseconds: 180));
+        }
+        return 'עובר לערוץ ${cmd.digits}';
+
+      case VoiceKind.powerOff:
+        if (c.isReady && c.powered == false) return 'הטלוויזיה כבר כבויה';
+        c.sendKey(K.power);
+        return 'מכבה את ${c.tv.name}';
+
+      case VoiceKind.powerOn:
+        if (c.isReady && c.powered == true) return 'הטלוויזיה כבר דלוקה';
+        await _power();
+        return 'מדליק את ${c.tv.name}';
+
+      case VoiceKind.unknown:
+        return '';
+    }
+  }
+
+  void _showVoice() {
+    if (store == null) return;
+    final prefs = store!.prefs;
+    final typed = TextEditingController();
+    var heard = '';
+    var status = 'לחץ על המיקרופון ואמור פקודה';
+    var listening = false;
+    var busy = false;
+    var started = false;
+    var closed = false;
+    var lang = prefs.getString('voice_lang') ?? 'he';
+    var mode = prefs.getString('voice_yt_mode') ?? 'link';
+
+    _sheet((ctx, setS) {
+      void upd(VoidCallback f) {
+        if (!closed && ctx.mounted) setS(f);
+      }
+
+      Future<void> run(String text) async {
+        if (text.trim().isEmpty || busy) return;
+        upd(() {
+          busy = true;
+          heard = text.trim();
+          status = 'מבצע…';
+        });
+        final r = await _runVoice(text, mode);
+        upd(() {
+          busy = false;
+          status = r;
+        });
+      }
+
+      Future<void> listen() async {
+        if (busy || closed) return;
+        if (listening) {
+          await _stt.stop();
+          upd(() => listening = false);
+          return;
+        }
+        upd(() => status = 'מכין את המיקרופון…');
+        if (!await _initStt()) {
+          upd(() => status =
+              'אין גישה למיקרופון או לזיהוי דיבור. אשר לאפליקציה הרשאת מיקרופון בהגדרות הטלפון ונסה שוב. אפשר גם להקליד פקודה למטה.');
+          return;
+        }
+        var done = false;
+        _onSttStatus = (s) {
+          if (s == 'done' || s == 'notListening') upd(() => listening = false);
+        };
+        _onSttError = (m) {
+          upd(() {
+            listening = false;
+            status = (m.contains('no_match') || m.contains('timeout'))
+                ? 'לא שמעתי פקודה. לחץ שוב על המיקרופון ודבר'
+                : 'שגיאה בזיהוי הדיבור ($m)';
+          });
+        };
+        upd(() {
+          listening = true;
+          heard = '';
+          status = 'מקשיב…';
+        });
+        HapticFeedback.mediumImpact();
+        try {
+          await _stt.listen(
+            localeId: lang == 'en' ? _enLocale : _heLocale,
+            listenFor: const Duration(seconds: 15),
+            pauseFor: const Duration(seconds: 3),
+            onResult: (r) {
+              upd(() => heard = r.recognizedWords);
+              if (r.finalResult && !done) {
+                done = true;
+                upd(() => listening = false);
+                run(r.recognizedWords);
+              }
+            },
+          );
+        } catch (_) {
+          upd(() {
+            listening = false;
+            status = 'שגיאה בהפעלת המיקרופון';
+          });
+        }
+      }
+
+      if (!started) {
+        started = true;
+        Future.delayed(const Duration(milliseconds: 350), listen);
+      }
+
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _title('פקודות קוליות'),
+        _hint('אמור למשל: "פתח יוטיוב ומצא שיר של עומר אדם", "תנגן ביוטיוב שירי ילדים", '
+            '"פתח נטפליקס", "תגביר ווליום", "ערוץ 12", "כבה את הטלוויזיה".'),
+        Center(
+          child: GestureDetector(
+            onTap: listen,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: listening ? C.red : const Color(0xFF15283F),
+                border: Border.all(color: listening ? C.red : C.blue.withAlpha(130), width: 2),
+                boxShadow: listening
+                    ? [BoxShadow(color: C.red.withAlpha(110), blurRadius: 28)]
+                    : const [],
+              ),
+              child: busy
+                  ? const Padding(
+                      padding: EdgeInsets.all(30),
+                      child: CircularProgressIndicator(color: C.blue, strokeWidth: 3))
+                  : Icon(listening ? Icons.stop_rounded : Icons.mic,
+                      size: 44, color: listening ? Colors.white : C.blue),
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text(heard.isEmpty ? '…' : '"$heard"',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        Text(status,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: C.muted, fontSize: 13.5, height: 1.5)),
+        const SizedBox(height: 16),
+        const Text('שפת הדיבור', style: TextStyle(color: C.muted, fontSize: 12)),
+        const SizedBox(height: 6),
+        Row(children: [
+          Expanded(
+              child: _chip('עברית', lang == 'he', () {
+            upd(() => lang = 'he');
+            prefs.setString('voice_lang', 'he');
+          })),
+          const SizedBox(width: 8),
+          Expanded(
+              child: _chip('English', lang == 'en', () {
+            upd(() => lang = 'en');
+            prefs.setString('voice_lang', 'en');
+          })),
+        ]),
+        const SizedBox(height: 12),
+        const Text('חיפוש ביוטיוב', style: TextStyle(color: C.muted, fontSize: 12)),
+        const SizedBox(height: 6),
+        Row(children: [
+          Expanded(
+              child: _chip('קישור ישיר (מהיר)', mode == 'link', () {
+            upd(() => mode = 'link');
+            prefs.setString('voice_yt_mode', 'link');
+          })),
+          const SizedBox(width: 8),
+          Expanded(
+              child: _chip('הקלדה בחיפוש', mode == 'type', () {
+            upd(() => mode = 'type');
+            prefs.setString('voice_yt_mode', 'type');
+          })),
+        ]),
+        const SizedBox(height: 16),
+        _field(typed, hint: 'או הקלד פקודה…', onSubmit: (v) {
+          run(v);
+          typed.clear();
+        }),
+        _primary('בצע', () {
+          run(typed.text);
+          typed.clear();
+        }),
+        _ghost('סגור', () => Navigator.pop(ctx)),
+      ]);
+    }).whenComplete(() {
+      closed = true;
+      _onSttStatus = null;
+      _onSttError = null;
+      if (_stt.isListening) _stt.stop();
+    });
+  }
+
+  Widget _chip(String label, bool on, VoidCallback onTap) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 38,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: on ? const Color(0xFF123526) : C.btn,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: on ? C.green.withAlpha(140) : Colors.transparent),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                  color: on ? C.green : C.text, fontWeight: FontWeight.w700, fontSize: 13)),
+        ),
+      );
+
   void _editApp(AppButton a) {
     final pkg = TextEditingController(text: a.package);
     final label = TextEditingController(text: a.label);
@@ -930,15 +1228,17 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
             const SizedBox(width: 8),
             Expanded(child: _navBtn(Icons.home_outlined, 'Home', K.home, C.green, C.green)),
             const SizedBox(width: 8),
-            Expanded(child: _navBtn(Icons.mic_none, 'Search', K.search, C.blue, C.blue)),
+            Expanded(child: _navBtn(Icons.search, 'Search', K.search, C.blue, C.blue)),
             const SizedBox(width: 8),
             Expanded(child: _navBtn(Icons.menu, 'Menu', K.menu, C.amber, C.amber)),
           ]),
           const SizedBox(height: 14),
           Row(children: [
             Expanded(child: _wideBtn(Icons.dialpad, '123', _showNumpad)),
-            const SizedBox(width: 10),
-            Expanded(child: _wideBtn(Icons.keyboard_outlined, 'Keyboard', _showKeyboard)),
+            const SizedBox(width: 8),
+            Expanded(child: _voiceBtn()),
+            const SizedBox(width: 8),
+            Expanded(child: _wideBtn(Icons.keyboard_outlined, 'Keys', _showKeyboard)),
           ]),
         ]),
       ),
@@ -1087,6 +1387,22 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         ]),
       );
 
+  Widget _voiceBtn() => Press(
+        semantics: 'פקודה קולית',
+        onPress: _showVoice,
+        height: 44,
+        decoration: BoxDecoration(
+          color: const Color(0xFF15283F),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: C.blue.withAlpha(110)),
+        ),
+        child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(Icons.mic, size: 19, color: C.blue),
+          SizedBox(width: 6),
+          Text('Voice', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: C.blue)),
+        ]),
+      );
+
   Widget _wideBtn(IconData icon, String label, VoidCallback onTap) => Press(
         semantics: label,
         onPress: onTap,
@@ -1099,6 +1415,198 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFFCFD1D6))),
         ]),
       );
+}
+
+// ---------- פענוח פקודות קוליות ----------
+
+enum VoiceKind { search, openApp, key, channel, powerOn, powerOff, unknown }
+
+class VoiceCmd {
+  final VoiceKind kind;
+  final AppButton? app;
+  final String? query;
+  final int key;
+  final int times;
+  final String? digits;
+  final String label;
+  const VoiceCmd(this.kind,
+      {this.app, this.query, this.key = 0, this.times = 1, this.digits, this.label = ''});
+}
+
+class VoiceParser {
+  static const _searchVerbs = {
+    'חפש', 'תחפש', 'חפשי', 'תחפשי', 'חיפוש', 'מצא', 'תמצא', 'מצאי', 'תמצאי',
+    'נגן', 'תנגן', 'נגני', 'תנגני', 'השמע', 'תשמיע', 'השמיעי', 'תשמיעי',
+    'שים', 'תשים', 'שימי', 'תשימי', 'search', 'find', 'play',
+  };
+
+  static const _fillStart = {
+    'לי', 'לנו', 'את', 'אותו', 'השיר', 'שיר', 'השירים', 'שירים', 'של', 'בבקשה',
+    'סרטון', 'סרטונים', 'קליפ', 'הקליפ', 'קליפים', 'משהו', 'על', 'ה',
+    'please', 'me', 'for', 'song', 'songs', 'video', 'videos', 'some', 'by',
+  };
+
+  static const _fillEnd = {
+    'בבקשה', 'עכשיו', 'לי', 'ב', 'באפליקציה', 'באפליקציית', 'אפליקציה', 'אפליקציית',
+    'בטלוויזיה', 'בטלויזיה', 'please', 'now', 'on', 'in', 'app',
+  };
+
+  static const _aliases = {
+    'youtube': ['יוטיוב', 'יוטוב', 'יוטיב', 'youtube'],
+    'netflix': ['נטפליקס', 'נטפלקס', 'netflix'],
+    'spotify': ['ספוטיפיי', 'ספוטיפי', 'ספוטיפאי', 'spotify'],
+    'freetv': ['פריטיוי', 'פריטיבי', 'freetv'],
+  };
+
+  static const _numWords = {
+    'אחת': 1, 'אחד': 1, 'שתיים': 2, 'שניים': 2, 'שתי': 2, 'שני': 2, 'שלוש': 3,
+    'שלושה': 3, 'ארבע': 4, 'ארבעה': 4, 'חמש': 5, 'חמישה': 5, 'שש': 6, 'שישה': 6,
+    'שבע': 7, 'שבעה': 7, 'שמונה': 8, 'תשע': 9, 'תשעה': 9, 'עשר': 10, 'עשרה': 10,
+  };
+
+  static String norm(String s) {
+    var t = s
+        .toLowerCase()
+        .replaceAll(RegExp(r'''[.,!?;:״"׳'()–—]'''), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    // שמות של שתי מילים הופכים למילה אחת
+    t = t.replaceAllMapped(
+        RegExp(r'(^|\s)([ובלהמש]{0,3})(יו טיוב|you tube|פרי טי ?וי|פרי tv|free tv|פרי טי ?בי)(?=\s|$)'),
+        (m) => '${m[1]}${m[2]}'
+            '${m[3]!.contains('טיוב') || m[3]!.contains('tube') ? 'youtube' : 'freetv'}');
+    return t;
+  }
+
+  static String? _appIdOf(String w, Map<String, String> table) {
+    var x = w;
+    for (var i = 0; i <= 3; i++) {
+      final id = table[x];
+      if (id != null) return id;
+      if (x.length < 4 || !'ובלהמש'.contains(x[0])) break;
+      x = x.substring(1);
+    }
+    return null;
+  }
+
+  static bool _isVerb(String w) =>
+      _searchVerbs.contains(w) || (w.startsWith('ו') && _searchVerbs.contains(w.substring(1)));
+
+  static VoiceCmd parse(String raw, List<AppButton> apps) {
+    final t = norm(raw);
+    if (t.isEmpty) return const VoiceCmd(VoiceKind.unknown);
+
+    // טבלת שמות האפליקציות
+    final table = <String, String>{};
+    for (final a in apps) {
+      for (final al in _aliases[a.id] ?? const <String>[]) {
+        table[al] = a.id;
+      }
+      final l = norm(a.label).replaceAll(' ', '');
+      if (l.length >= 3) table[l] = a.id;
+    }
+
+    // מוציאים את שם האפליקציה מהמשפט
+    AppButton? app;
+    final rest = <String>[];
+    for (final w in t.split(' ')) {
+      final id = _appIdOf(w, table);
+      if (id != null) {
+        app ??= apps.firstWhere((a) => a.id == id);
+        continue;
+      }
+      rest.add(w);
+    }
+
+    // חיפוש: "מצא / חפש / תנגן ..."
+    final vi = rest.indexWhere(_isVerb);
+    if (vi >= 0) {
+      final q = rest.sublist(vi + 1);
+      while (q.isNotEmpty && _fillStart.contains(q.first)) {
+        q.removeAt(0);
+      }
+      while (q.isNotEmpty && _fillEnd.contains(q.last)) {
+        q.removeLast();
+      }
+      if (q.isNotEmpty) return VoiceCmd(VoiceKind.search, app: app, query: q.join(' '));
+      if (app != null) return VoiceCmd(VoiceKind.openApp, app: app);
+      return const VoiceCmd(VoiceKind.key, key: K.playPause, label: 'הפעלה / השהיה');
+    }
+
+    // פתיחת אפליקציה: "פתח נטפליקס", "יוטיוב"
+    if (app != null) return VoiceCmd(VoiceKind.openApp, app: app);
+
+    bool has(String p) => RegExp('(?:^|\\s)ו?(?:$p)(?=\\s|\$)').hasMatch(t);
+    int? n = int.tryParse(RegExp(r'\d+').firstMatch(t)?.group(0) ?? '');
+    if (n == null) {
+      for (final w in t.split(' ')) {
+        final v = _numWords[w];
+        if (v != null) {
+          n = v;
+          break;
+        }
+      }
+    }
+    int count(int def) => (n ?? def).clamp(1, 30).toInt();
+
+    const vol = '(?:ה?ו?וליום|ה?עוצמה|ה?קול|ה?סאונד|volume)';
+
+    final hdmi = RegExp(r'hdmi ?(\d)').firstMatch(t);
+    if (hdmi != null) {
+      final h = int.parse(hdmi.group(1)!).clamp(1, 4).toInt();
+      return VoiceCmd(VoiceKind.key, key: K.hdmi(h), label: 'עובר ל-HDMI $h');
+    }
+    if (has('מקור|מקורות|מקור קלט|input|source')) {
+      return const VoiceCmd(VoiceKind.key, key: K.input, label: 'פותח את רשימת המקורות');
+    }
+    final ch = RegExp(r'ערוץ (\d+)').firstMatch(t);
+    if (ch != null) return VoiceCmd(VoiceKind.channel, digits: ch.group(1));
+    if (has('ל?ערוץ (?:ה)?(?:הבא|למעלה|קדימה)|next channel|channel up')) {
+      return const VoiceCmd(VoiceKind.key, key: K.chUp, label: 'ערוץ הבא');
+    }
+    if (has('ל?ערוץ (?:ה)?(?:קודם|הקודם|למטה|אחורה)|previous channel|channel down')) {
+      return const VoiceCmd(VoiceKind.key, key: K.chDown, label: 'ערוץ קודם');
+    }
+    if (has('השתק|תשתיק|השתיקי|תשתיקי|שקט|mute|unmute|בטל השתקה|תבטל השתקה|'
+        '(?:כבה|תכבה|כבי|תכבי|החזר|תחזיר|תחזירי) (?:את )?$vol')) {
+      return const VoiceCmd(VoiceKind.key, key: K.mute, label: 'השתקה');
+    }
+    if (has('תגביר|הגבר|הגבירי|תגבירי|(?:תעלה|העלה|תעלי|הגבר|תגביר) (?:את )?$vol|$vol למעלה|'
+        'יותר חזק|חזק יותר|louder|volume up|turn it up')) {
+      return VoiceCmd(VoiceKind.key, key: K.volUp, times: count(4), label: 'מגביר את הקול');
+    }
+    if (has('תנמיך|הנמך|הנמיכי|תנמיכי|(?:תוריד|הורד|תורידי|הנמך|תנמיך) (?:את )?$vol|$vol למטה|'
+        'יותר חלש|חלש יותר|יותר בשקט|quieter|volume down|turn it down')) {
+      return VoiceCmd(VoiceKind.key, key: K.volDown, times: count(4), label: 'מנמיך את הקול');
+    }
+    if (has('כבה|תכבה|כבי|תכבי|כיבוי|turn off|power off|switch off')) {
+      return const VoiceCmd(VoiceKind.powerOff);
+    }
+    if (has('הדלק|תדליק|הדליקי|תדליקי|הדלקה|turn on|power on|switch on')) {
+      return const VoiceCmd(VoiceKind.powerOn);
+    }
+    if (has('בית|הבית|למסך הבית|מסך הבית|מסך ראשי|home')) {
+      return const VoiceCmd(VoiceKind.key, key: K.home, label: 'מסך הבית');
+    }
+    if (has('חזור|תחזור|חזרי|תחזרי|אחורה|back|go back')) {
+      return const VoiceCmd(VoiceKind.key, key: K.back, label: 'חזרה');
+    }
+    if (has('עצור|תעצור|עצרי|תעצרי|פאוז|השהה|תשהה|pause|stop|המשך|תמשיך|המשיכי|תמשיכי|resume')) {
+      return const VoiceCmd(VoiceKind.key, key: K.playPause, label: 'הפעלה / השהיה');
+    }
+    if (has('הגדרות|settings')) {
+      return const VoiceCmd(VoiceKind.key, key: K.settings, label: 'הגדרות');
+    }
+    if (has('אישור|אוקיי|אוקי|ok|okay|enter|בחר|תבחר')) {
+      return const VoiceCmd(VoiceKind.key, key: K.ok, label: 'אישור');
+    }
+    if (has('למעלה|up')) return VoiceCmd(VoiceKind.key, key: K.up, times: count(1), label: 'למעלה');
+    if (has('למטה|down')) return VoiceCmd(VoiceKind.key, key: K.down, times: count(1), label: 'למטה');
+    if (has('שמאלה|left')) return VoiceCmd(VoiceKind.key, key: K.left, times: count(1), label: 'שמאלה');
+    if (has('ימינה|right')) return VoiceCmd(VoiceKind.key, key: K.right, times: count(1), label: 'ימינה');
+
+    return const VoiceCmd(VoiceKind.unknown);
+  }
 }
 
 class StatusDot extends StatelessWidget {

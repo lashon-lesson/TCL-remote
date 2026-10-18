@@ -30,6 +30,7 @@ class TvConnection extends ChangeNotifier {
   String? currentApp; // האפליקציה שפתוחה כרגע בטלוויזיה
   bool _appReported = false;
   bool imeActive = false; // הטלוויזיה דיווחה על שדה הקלדה
+  DateTime? imeAt; // מתי נפתח לאחרונה שדה הקלדה בטלוויזיה
   int _imeCounter = 0;
   int _fieldCounter = 0;
 
@@ -117,6 +118,7 @@ class TvConnection extends ChangeNotifier {
       if (field != null) {
         _fieldCounter = field.int32(1, _fieldCounter);
         imeActive = true;
+        imeAt = DateTime.now();
       }
       final pkg = app?.str(12);
       if (pkg != null && pkg.isNotEmpty) {
@@ -129,11 +131,13 @@ class TvConnection extends ChangeNotifier {
       _imeCounter = b.int32(1, _imeCounter);
       _fieldCounter = b.int32(2, _fieldCounter);
       imeActive = true;
+      imeAt = DateTime.now();
       notifyListeners();
     } else if (f.has(22)) {
       final field = f.msg(22)?.msg(2);
       if (field != null) _fieldCounter = field.int32(1, _fieldCounter);
       imeActive = true;
+      imeAt = DateTime.now();
       notifyListeners();
     } else if (f.has(40)) {
       powered = f.msg(40)?.int32(1) == 1;
@@ -299,6 +303,72 @@ class TvConnection extends ChangeNotifier {
       if (isReady) sendKey(23); // OK על הכפתור "פתיחה"
     });
     return 'store';
+  }
+
+  // ---------- חיפוש (לפקודות קוליות) ----------
+
+  Future<bool> _waitFor(bool Function() test, int ms) async {
+    for (var t = 0; t < ms ~/ 200; t++) {
+      if (test()) return true;
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (_disposed) return false;
+    }
+    return test();
+  }
+
+  /// מחכה שהחיבור יהיה מוכן (ומתחבר מחדש אם צריך)
+  Future<bool> waitReady({int ms = 7000}) async {
+    if (isReady) return true;
+    if (!canSend) return false;
+    if (status == TvStatus.offline || status == TvStatus.error) {
+      _fails = 0;
+      connect();
+    }
+    return _waitFor(() => isReady, ms);
+  }
+
+  static const youtubePkg = 'com.google.android.youtube.tv';
+
+  /// מחפש טקסט בתוך אפליקציה.
+  /// 'link' – נשלח קישור חיפוש ישיר, 'typed' – החיפוש הוקלד בשדה החיפוש,
+  /// 'no_field' – שדה החיפוש לא נפתח, 'offline' – אין חיבור
+  Future<String> searchIn(String pkg, String query, {bool preferLink = true}) async {
+    if (!await waitReady()) return 'offline';
+
+    if (preferLink && pkg == youtubePkg) {
+      sendAppLink('https://www.youtube.com/results?search_query=${Uri.encodeQueryComponent(query)}');
+      return 'link';
+    }
+
+    // פותחים את האפליקציה (אם היא לא פתוחה כבר) ומחכים שתיטען
+    if (currentApp != pkg) {
+      launchApp(pkg);
+      if (_appReported) {
+        await _waitFor(() => currentApp == pkg, 15000);
+      } else {
+        await Future.delayed(const Duration(seconds: 6));
+      }
+      await Future.delayed(const Duration(milliseconds: 2500));
+    }
+    if (!isReady) return 'offline';
+
+    // מקש החיפוש פותח את מסך החיפוש של האפליקציה
+    var before = imeAt;
+    sendKey(84);
+    var field = await _waitFor(() => imeAt != null && imeAt != before, 4000);
+    if (!field) {
+      // ניסיון נוסף: חלק מהאפליקציות צריכות לחיצת OK על תיבת החיפוש
+      before = imeAt;
+      sendKey(23);
+      field = await _waitFor(() => imeAt != null && imeAt != before, 3000);
+    }
+    if (!field) return 'no_field';
+
+    await Future.delayed(const Duration(milliseconds: 400));
+    sendImeText(query);
+    await Future.delayed(const Duration(milliseconds: 1000));
+    sendKey(66); // Enter – מריץ את החיפוש
+    return 'typed';
   }
 
   // ---------- צימוד ----------
