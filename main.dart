@@ -11,6 +11,9 @@ import 'atv/connection.dart';
 import 'atv/identity.dart';
 import 'atv/keys.dart';
 import 'build_info.dart';
+import 'lg.dart';
+import 'remote.dart';
+import 'samsung.dart';
 import 'scanner.dart';
 import 'store.dart';
 
@@ -43,7 +46,7 @@ class RemoteApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'שלט TCL',
+      title: 'שלט',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -68,11 +71,11 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
   Identity? identity;
   List<TvDevice> tvs = [];
   List<AppButton> apps = [];
-  final conns = <String, TvConnection>{};
+  final conns = <String, TvRemote>{};
   String? sel;
   String? _pairPromptFor;
 
-  TvConnection? get cur => sel == null ? null : conns[sel];
+  TvRemote? get cur => sel == null ? null : conns[sel];
 
   @override
   void initState() {
@@ -95,7 +98,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _checkUpdate();
       for (final c in conns.values) {
-        if (!c.isReady && c.status != TvStatus.pairing) c.connect();
+        if (!c.isReady && c.status != TvStatus.pairing && c.status != TvStatus.approve) c.connect();
       }
     }
   }
@@ -155,20 +158,29 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
   }
 
   void _open(TvDevice tv) {
-    final c = TvConnection(tv, identity!, () => store!.saveTvs(tvs));
+    void save() => store!.saveTvs(tvs);
+    final TvRemote c = switch (tv.brand) {
+      'samsung' => SamsungConnection(tv, save),
+      'lg' => LgConnection(tv, save),
+      _ => TvConnection(tv, identity!, save),
+    };
     c.addListener(() => _onConnChange(c));
     conns[tv.id] = c;
     c.connect();
   }
 
-  void _onConnChange(TvConnection c) {
+  void _onConnChange(TvRemote c) {
     if (!mounted) return;
     setState(() {});
     if (c.tv.id == sel &&
-        c.status == TvStatus.pairing &&
+        (c.status == TvStatus.pairing || c.status == TvStatus.approve) &&
         _pairPromptFor != c.tv.id) {
       _pairPromptFor = c.tv.id;
-      _showPairSheet(c);
+      if (c is TvConnection && c.status == TvStatus.pairing) {
+        _showPairSheet(c);
+      } else {
+        _showApproveSheet(c);
+      }
     }
     if (c.status == TvStatus.ready && _pairPromptFor == c.tv.id) {
       _pairPromptFor = null;
@@ -197,7 +209,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
       ));
   }
 
-  TvConnection? _need() {
+  TvRemote? _need() {
     final c = cur;
     if (c == null) {
       _showTvSheet();
@@ -205,8 +217,12 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
       return null;
     }
     if (!c.isReady) {
-      if (c.status == TvStatus.pairing) {
+      if (c.status == TvStatus.pairing && c is TvConnection) {
         _showPairSheet(c);
+        return null;
+      }
+      if (c.status == TvStatus.approve) {
+        _showApproveSheet(c);
         return null;
       }
       if (c.canSend) {
@@ -214,7 +230,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         if (c.status != TvStatus.connecting) _toast('מתחבר לטלוויזיה…');
         return c;
       }
-      _toast('הטלוויזיה לא מחוברת. לחץ על TCL');
+      _toast('הטלוויזיה לא מחוברת. לחץ על השם שלה למעלה');
       return null;
     }
     return c;
@@ -245,21 +261,22 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         break;
       case 'unreachable':
         _toast(c.tv.mac == null
-            ? 'הטלוויזיה בכיבוי מלא ולא עונה. צריך להפעיל בה "המתנה ברשת" – או להזין כתובת MAC (TCL ← ⋮)'
+            ? 'הטלוויזיה בכיבוי מלא ולא עונה. צריך להפעיל בה "המתנה ברשת" – או להזין כתובת MAC (שם הטלוויזיה למעלה ← ⋮)'
             : 'הטלוויזיה לא עונה. בדוק שהופעלה בה "המתנה ברשת"');
         break;
     }
   }
 
   void _launch(AppButton a) {
-    if (a.package.isEmpty) {
+    final c = _need();
+    if (c == null) return;
+    final id = a.idFor(c.tv.brand);
+    if (id.isEmpty) {
       _editApp(a);
       return;
     }
-    final c = _need();
-    if (c == null) return;
     HapticFeedback.lightImpact();
-    final r = c.launchApp(a.package);
+    final r = c.launchApp(id);
     _toast(r == 'store' ? 'פותח את ${a.label} דרך החנות…' : 'פותח את ${a.label}…');
   }
 
@@ -451,6 +468,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     TvStatus.ready: 'מחובר',
     TvStatus.connecting: 'מתחבר…',
     TvStatus.pairing: 'ממתין לקוד',
+    TvStatus.approve: 'ממתין לאישור בטלוויזיה',
     TvStatus.error: 'שגיאה',
     TvStatus.offline: 'לא מחובר',
   };
@@ -461,25 +479,41 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     final host = TextEditingController();
     var scanning = false;
     double progress = 0;
-    List<String>? found;
+    List<FoundTv>? found;
+    var detecting = false;
 
     _sheet((ctx, setS) {
-      void addTv(String n, String h) {
-        h = h.trim();
-        if (!RegExp(r'^[\w.-]+$').hasMatch(h)) {
-          _toast('כתובת IP לא תקינה');
-          return;
-        }
+      void addTv(String n, String h, String brand) {
         final tv = TvDevice(
             id: DateTime.now().millisecondsSinceEpoch.toRadixString(36),
             name: n.trim().isEmpty ? 'טלוויזיה ${tvs.length + 1}' : n.trim(),
-            host: h);
+            host: h,
+            brand: brand);
         tvs.add(tv);
         store!.saveTvs(tvs);
         _select(tv.id);
         _open(tv);
         Navigator.pop(ctx);
-        _toast('מתחבר… בעוד רגע יופיע קוד על הטלוויזיה');
+        _toast(brand == 'atv'
+            ? 'מתחבר… בעוד רגע יופיע קוד על הטלוויזיה'
+            : 'מתחבר… אשר את החיבור על מסך הטלוויזיה');
+      }
+
+      Future<void> addManual(String n, String h) async {
+        h = h.trim();
+        if (!RegExp(r'^[\w.-]+$').hasMatch(h)) {
+          _toast('כתובת IP לא תקינה');
+          return;
+        }
+        setS(() => detecting = true);
+        final t = await detectTv(h, ms: 2000);
+        if (!ctx.mounted) return;
+        setS(() => detecting = false);
+        if (t == null) {
+          _toast('לא נמצאה טלוויזיה בכתובת הזו. ודא שהיא דלוקה ובאותה רשת');
+          return;
+        }
+        addTv(n.trim().isEmpty && t.name.isNotEmpty ? t.name : n, h, t.brand);
       }
 
       return ListenableBuilder(
@@ -527,29 +561,34 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
               ),
             if (found != null) ...[
               const SizedBox(height: 10),
-              if (found!.where((ip) => !tvs.any((t) => t.host == ip)).isEmpty)
+              if (found!.where((f) => !tvs.any((t) => t.host == f.ip)).isEmpty)
                 _hint('לא נמצאו טלוויזיות חדשות. ודא שהטלוויזיה דלוקה, או הזן כתובת ידנית.'),
-              for (final ip in found!.where((ip) => !tvs.any((t) => t.host == ip)))
+              for (final f in found!.where((f) => !tvs.any((t) => t.host == f.ip)))
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: ListTile(
                     tileColor: const Color(0xFF24252B),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     leading: const Icon(Icons.tv, color: C.green),
-                    title: Text(ip, textDirection: TextDirection.ltr, textAlign: TextAlign.right),
+                    title: Text(f.name.isEmpty ? brandName(f.brand) : '${f.name} · ${brandName(f.brand)}'),
+                    subtitle: Text(f.ip,
+                        textDirection: TextDirection.ltr,
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(color: C.muted, fontSize: 12)),
                     trailing: const Text('הוסף', style: TextStyle(color: C.green)),
-                    onTap: () => addTv(name.text, ip),
+                    onTap: () => addTv(name.text.trim().isEmpty ? f.name : name.text, f.ip, f.brand),
                   ),
                 ),
             ],
             const SizedBox(height: 16),
-            _hint('או הוספה ידנית. את הכתובת מוצאים בטלוויזיה: הגדרות ← רשת ואינטרנט ← הרשת המחוברת.'),
+            _hint('או הוספה ידנית (TCL, סמסונג או LG – הסוג מזוהה לבד). את הכתובת מוצאים בהגדרות הרשת של הטלוויזיה.'),
             _field(name, hint: 'שם (למשל: סלון)'),
             _field(host,
                 hint: 'כתובת IP (למשל 192.168.1.40)',
                 ltr: true,
                 type: const TextInputType.numberWithOptions(decimal: true)),
-            _primary('הוסף טלוויזיה', () => addTv(name.text, host.text)),
+            _primary(detecting ? 'מזהה את הטלוויזיה…' : 'הוסף טלוויזיה',
+                detecting ? null : () => addManual(name.text, host.text)),
             _ghost('סגור', () => Navigator.pop(ctx)),
           ],
         ),
@@ -583,7 +622,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(tv.name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 2),
-                Text('${tv.host}  ${_statusText[st]}$err',
+                Text('${brandName(tv.brand)} · ${tv.host}  ${_statusText[st]}$err',
                     style: const TextStyle(color: C.muted, fontSize: 12)),
               ]),
             ),
@@ -594,11 +633,9 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
                 if (v == 're') {
                   c?.connect();
                 } else if (v == 'pair') {
-                  tv.paired = false;
-                  store!.saveTvs(tvs);
                   _pairPromptFor = null;
                   _select(tv.id);
-                  c?.startPairing();
+                  c?.repair();
                 } else if (v == 'mac') {
                   _editMac(tv);
                 } else if (v == 'del') {
@@ -623,7 +660,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
               },
               itemBuilder: (_) => const [
                 PopupMenuItem(value: 're', child: Text('חבר מחדש')),
-                PopupMenuItem(value: 'pair', child: Text('צמד מחדש')),
+                PopupMenuItem(value: 'pair', child: Text('צמד / אשר מחדש')),
                 PopupMenuItem(value: 'mac', child: Text('כתובת MAC להדלקה')),
                 PopupMenuItem(value: 'del', child: Text('מחק')),
               ],
@@ -632,6 +669,34 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         ),
       ),
     );
+  }
+
+  void _showApproveSheet(TvRemote c) {
+    var closed = false;
+    _sheet((ctx, setS) => ListenableBuilder(
+          listenable: c,
+          builder: (ctx, _) {
+            if (c.isReady && !closed) {
+              closed = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (ctx.mounted) Navigator.pop(ctx);
+              });
+            }
+            return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              _title('אשר את החיבור בטלוויזיה'),
+              _hint(c.tv.brand == 'lg'
+                  ? 'על מסך ה-LG הופיעה הודעה שמבקשת לאשר חיבור. בחר "אישור" (Accept) בשלט הרגיל.'
+                  : 'על מסך הסמסונג הופיעה הודעה שמבקשת לאשר את "Phone Remote". בחר "אפשר" (Allow) בשלט הרגיל.'),
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: Center(child: CircularProgressIndicator(color: C.green)),
+              ),
+              _hint('אם ההודעה לא הופיעה או נעלמה, לחץ "נסה שוב".'),
+              _primary('נסה שוב', () => c.repair()),
+              _ghost('סגור', () => Navigator.pop(ctx)),
+            ]);
+          },
+        ));
   }
 
   void _showPairSheet(TvConnection c) {
@@ -645,7 +710,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         } else {
           setS(() => err = c.status == TvStatus.pairing
               ? 'הקוד לא תואם. בדוק ונסה שוב'
-              : 'הבקשה פגה. לחץ על TCL ← צמד מחדש');
+              : 'הבקשה פגה. לחץ על שם הטלוויזיה ← צמד מחדש');
         }
       }
 
@@ -785,6 +850,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
   void _showKeyboard() {
     final text = TextEditingController();
     Timer? debounce;
+    cur?.textReset();
 
     _sheet((ctx, setS) {
       void live(String v) {
@@ -792,7 +858,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         debounce = Timer(const Duration(milliseconds: 180), () {
           final c = cur;
           if (c == null || !c.isReady || v.isEmpty) return;
-          c.sendImeText(v);
+          c.sendText(v);
         });
       }
 
@@ -818,7 +884,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         builder: (ctx, _) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _title('הקלדה בטלוויזיה'),
           _hint('בטלוויזיה עמוד על שדה החיפוש (ביוטיוב, בנטפליקס או בכל אפליקציה) ולחץ OK, כך שהמקלדת של הטלוויזיה תופיע. מה שתקליד כאן יופיע שם מיד, גם בעברית.'),
-          Padding(
+          if (c?.reportsIme == true) Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: Row(children: [
               StatusDot(c?.imeActive == true ? TvStatus.ready : TvStatus.connecting),
@@ -868,7 +934,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
             ),
           ]),
           const SizedBox(height: 6),
-          TextButton(
+          if (c is TvConnection) TextButton(
             onPressed: asKeys,
             child: const Text('הטקסט לא מופיע? שלח כמקשים (אנגלית בלבד)',
                 style: TextStyle(color: C.muted, fontSize: 12.5)),
@@ -936,17 +1002,26 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     switch (cmd.kind) {
       case VoiceKind.openApp:
         final a = cmd.app!;
-        if (a.package.isEmpty) return 'לכפתור ${a.label} עדיין לא הוגדרה אפליקציה';
+        final id = a.idFor(c.tv.brand);
+        if (id.isEmpty) return 'לכפתור ${a.label} עדיין לא הוגדרה אפליקציה. לחיצה ארוכה על הכפתור מגדירה אותה';
         if (!await c.waitReady()) return 'הטלוויזיה לא עונה';
-        c.launchApp(a.package);
+        c.launchApp(id);
         return 'פותח את ${a.label}';
 
       case VoiceKind.search:
         final a = cmd.app ?? _searchApp();
-        if (a.package.isEmpty) return 'לכפתור ${a.label} עדיין לא הוגדרה אפליקציה';
+        if (c.tv.brand == 'atv' && a.package.isEmpty) {
+          return 'לכפתור ${a.label} עדיין לא הוגדרה אפליקציה';
+        }
         final q = cmd.query!;
-        final r = await c.searchIn(a.package, q, preferLink: ytMode != 'type');
+        final r = await c.searchIn(a, q, preferLink: ytMode != 'type');
         switch (r) {
+          case 'video':
+            return 'מנגן ב-YouTube את התוצאה הראשונה ל"$q"';
+          case 'novideo':
+            return 'פתחתי את YouTube, אבל לא מצאתי תוצאה ל"$q"';
+          case 'opened':
+            return '${a.label} נפתחה. כאן אפשר לחפש בה דרך Keys';
           case 'link':
             return 'מחפש ב-${a.label}: "$q"\nאם נפתח רק היוטיוב בלי תוצאות, בחר למטה "הקלדה בחיפוש" ונסה שוב.';
           case 'typed':
@@ -1180,6 +1255,89 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
       );
 
   void _editApp(AppButton a) {
+    final c = cur;
+    final brand = c?.tv.brand ?? 'atv';
+    if (brand != 'atv' && c != null) {
+      _pickApp(a, c);
+      return;
+    }
+    _editAppAtv(a);
+  }
+
+  /// בחירת אפליקציה מהרשימה שבטלוויזיה (סמסונג / LG)
+  void _pickApp(AppButton a, TvRemote c) {
+    final brand = c.tv.brand;
+    final manual = TextEditingController(text: a.idFor(brand));
+    final label = TextEditingController(text: a.label);
+    List<({String id, String name})>? list;
+    var loading = true;
+    var started = false;
+
+    void save(String id) {
+      setState(() {
+        a.ids[brand] = id.trim();
+        if (label.text.trim().isNotEmpty) a.label = label.text.trim();
+      });
+      store!.saveApps(apps);
+      _toast('נשמר. לחיצה ארוכה על הכפתור פותחת שוב את ההגדרה');
+    }
+
+    _sheet((ctx, setS) {
+      if (!started) {
+        started = true;
+        c.installedApps().then((r) {
+          if (ctx.mounted) {
+            setS(() {
+              list = r;
+              loading = false;
+            });
+          }
+        });
+      }
+      final current = a.idFor(brand);
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        _title('הגדרת ${a.label} ב-${brandName(brand)}'),
+        _hint('בחר את האפליקציה מהרשימה של הטלוויזיה.'),
+        _field(label, hint: 'שם הכפתור'),
+        if (loading)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(child: CircularProgressIndicator(color: C.green)),
+          )
+        else if (list == null || list!.isEmpty)
+          _hint('לא הצלחתי לקבל את רשימת האפליקציות מהטלוויזיה. אפשר להזין מזהה ידנית.')
+        else
+          for (final app in list!)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: ListTile(
+                tileColor: const Color(0xFF24252B),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                title: Text(app.name),
+                subtitle: Text(app.id,
+                    textDirection: TextDirection.ltr,
+                    style: const TextStyle(color: C.muted, fontSize: 11)),
+                trailing: app.id == current
+                    ? const Text('✓', style: TextStyle(color: C.green, fontSize: 18))
+                    : null,
+                onTap: () {
+                  save(app.id);
+                  Navigator.pop(ctx);
+                },
+              ),
+            ),
+        const SizedBox(height: 10),
+        _field(manual, hint: 'מזהה ידני', ltr: true),
+        _primary('שמור', () {
+          save(manual.text);
+          Navigator.pop(ctx);
+        }),
+        _ghost('ביטול', () => Navigator.pop(ctx)),
+      ]);
+    });
+  }
+
+  void _editAppAtv(AppButton a) {
     final pkg = TextEditingController(text: a.package);
     final label = TextEditingController(text: a.label);
     _sheet((ctx, setS) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -1277,9 +1435,9 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Row(children: [
-                    const Text('TCL',
-                        style: TextStyle(
-                            color: C.red, fontWeight: FontWeight.w800, fontSize: 17, letterSpacing: 5)),
+                    Text(c?.brandLabel ?? 'TV',
+                        style: const TextStyle(
+                            color: C.red, fontWeight: FontWeight.w800, fontSize: 17, letterSpacing: 3)),
                     const SizedBox(width: 6),
                     StatusDot(c?.status),
                     const SizedBox(width: 6),
@@ -1755,7 +1913,7 @@ class StatusDot extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = switch (status) {
       TvStatus.ready => C.green,
-      TvStatus.connecting || TvStatus.pairing => C.amber,
+      TvStatus.connecting || TvStatus.pairing || TvStatus.approve => C.amber,
       TvStatus.error => C.red,
       _ => const Color(0xFF555555),
     };

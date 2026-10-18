@@ -113,30 +113,99 @@ class Prefs {
   }
 }
 
+/// סוגי טלוויזיות: 'atv' – Android TV / Google TV (TCL ועוד), 'samsung', 'lg'
+const brands = ['atv', 'samsung', 'lg'];
+
+String brandName(String b) => switch (b) {
+      'samsung' => 'Samsung',
+      'lg' => 'LG',
+      _ => 'TCL / Android TV',
+    };
+
 class TvDevice {
   final String id;
   String name;
   String host;
   bool paired;
   String? mac; // להדלקה דרך הרשת
-  TvDevice({required this.id, required this.name, required this.host, this.paired = false, this.mac});
+  String brand;
+  String? token; // אישור החיבור (סמסונג / LG)
+  TvDevice(
+      {required this.id,
+      required this.name,
+      required this.host,
+      this.paired = false,
+      this.mac,
+      this.brand = 'atv',
+      this.token});
 
-  Map<String, dynamic> toJson() =>
-      {'id': id, 'name': name, 'host': host, 'paired': paired, 'mac': mac};
+  String get brandLabel => switch (brand) {
+        'samsung' => 'SAMSUNG',
+        'lg' => 'LG',
+        _ => 'TCL',
+      };
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'host': host,
+        'paired': paired,
+        'mac': mac,
+        'brand': brand,
+        'token': token,
+      };
   factory TvDevice.fromJson(Map<String, dynamic> j) => TvDevice(
-      id: j['id'], name: j['name'], host: j['host'], paired: j['paired'] == true, mac: j['mac']);
+      id: j['id'],
+      name: j['name'],
+      host: j['host'],
+      paired: j['paired'] == true,
+      mac: j['mac'],
+      brand: brands.contains(j['brand']) ? j['brand'] : 'atv',
+      token: j['token']);
 }
+
+/// מזהי אפליקציות ידועים בסמסונג וב-LG
+const _brandAppIds = {
+  'samsung': {
+    'youtube': '111299001912',
+    'netflix': '3201907018807',
+    'spotify': '3201606009684',
+  },
+  'lg': {
+    'youtube': 'youtube.leanback.v4',
+    'netflix': 'netflix',
+    'spotify': 'spotify-beehive',
+  },
+};
 
 class AppButton {
   final String id;
   String label;
   final int color;
-  String package;
-  AppButton(this.id, this.label, this.color, this.package);
+  String package; // Android TV
+  final Map<String, String> ids; // מזהים בסמסונג / LG שהמשתמש בחר
+  AppButton(this.id, this.label, this.color, this.package, [Map<String, String>? ids])
+      : ids = ids ?? {};
 
-  Map<String, dynamic> toJson() => {'id': id, 'label': label, 'color': color, 'package': package};
-  factory AppButton.fromJson(Map<String, dynamic> j) =>
-      AppButton(j['id'], j['label'], j['color'], j['package'] ?? '');
+  Map<String, dynamic> toJson() =>
+      {'id': id, 'label': label, 'color': color, 'package': package, 'ids': ids};
+  factory AppButton.fromJson(Map<String, dynamic> j) => AppButton(
+      j['id'],
+      j['label'],
+      j['color'],
+      j['package'] ?? '',
+      j['ids'] is Map ? Map<String, String>.from((j['ids'] as Map).map((k, v) => MapEntry('$k', '$v'))) : null);
+
+  /// מזהה האפליקציה בסוג הטלוויזיה הנתון
+  String idFor(String brand) {
+    if (brand == 'atv') return package;
+    final own = ids[brand];
+    if (own != null && own.isNotEmpty) return own;
+    return _brandAppIds[brand]?[id] ?? '';
+  }
+
+  bool isYoutubeOn(String brand) => id == 'youtube' || idFor(brand) == _brandAppIds[brand]?['youtube'] ||
+      package == 'com.google.android.youtube.tv';
 
   /// קישור לפתיחת האפליקציה בטלוויזיה
   String get link => package.contains('://') ? package : 'market://launch?id=$package';

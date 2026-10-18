@@ -1,9 +1,40 @@
-// חיפוש טלוויזיות ברשת: בודק אילו כתובות פותחות את פורט השלט (6466)
+// חיפוש טלוויזיות ברשת: Android TV (פורט 6466), סמסונג (8001) ו-LG (3000/3001)
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
-Future<List<String>> scanForTvs({void Function(double)? onProgress}) async {
+import 'samsung.dart';
+
+typedef FoundTv = ({String ip, String brand, String name});
+
+Future<bool> _open(String ip, int port, {int ms = 700}) async {
+  try {
+    final s = await Socket.connect(ip, port, timeout: Duration(milliseconds: ms));
+    s.destroy();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// מזהה איזה סוג טלוויזיה נמצא בכתובת, או null אם לא נמצאה
+Future<FoundTv?> detectTv(String ip, {int ms = 700}) async {
+  final r = await Future.wait([
+    _open(ip, 6466, ms: ms),
+    _open(ip, 8001, ms: ms),
+    _open(ip, 3000, ms: ms),
+    _open(ip, 3001, ms: ms),
+  ]);
+  if (r[1]) {
+    final info = await samsungInfo(ip);
+    if (info != null) return (ip: ip, brand: 'samsung', name: info.name);
+  }
+  if (r[0]) return (ip: ip, brand: 'atv', name: '');
+  if (r[2] || r[3]) return (ip: ip, brand: 'lg', name: 'LG TV');
+  return null;
+}
+
+Future<List<FoundTv>> scanForTvs({void Function(double)? onProgress}) async {
   final ifaces = await NetworkInterface.list(
       type: InternetAddressType.IPv4, includeLoopback: false);
 
@@ -31,23 +62,19 @@ Future<List<String>> scanForTvs({void Function(double)? onProgress}) async {
     for (final p in prefixes)
       for (var n = 1; n < 255; n++) '$p.$n'
   ];
-  final found = <String>[];
+  final found = <FoundTv>[];
   var done = 0;
-  const batch = 48;
+  const batch = 32;
   for (var i = 0; i < hosts.length; i += batch) {
     final chunk = hosts.sublist(i, min(i + batch, hosts.length));
     await Future.wait(chunk.map((ip) async {
-      try {
-        final s = await Socket.connect(ip, 6466,
-            timeout: const Duration(milliseconds: 700));
-        s.destroy();
-        found.add(ip);
-      } catch (_) {}
+      final t = await detectTv(ip);
+      if (t != null) found.add(t);
     }));
     done += chunk.length;
     onProgress?.call(done / hosts.length);
   }
   found.sort((a, b) =>
-      int.parse(a.split('.').last).compareTo(int.parse(b.split('.').last)));
+      int.parse(a.ip.split('.').last).compareTo(int.parse(b.ip.split('.').last)));
   return found;
 }

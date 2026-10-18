@@ -8,28 +8,36 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
+import '../remote.dart';
 import '../store.dart';
 import 'der.dart';
 import 'identity.dart';
 import 'proto.dart';
 
-enum TvStatus { offline, connecting, pairing, ready, error }
-
-class TvConnection extends ChangeNotifier {
+/// Android TV / Google TV (TCL ועוד) – פרוטוקול Android TV Remote v2
+class TvConnection extends TvRemote {
+  @override
   final TvDevice tv;
   final Identity identity;
   final VoidCallback onPairedChanged;
   TvConnection(this.tv, this.identity, this.onPairedChanged);
 
+  @override
   TvStatus status = TvStatus.offline;
+  @override
   String? error;
+  @override
   bool? powered;
+  @override
   bool? muted;
   int? volume;
   int? volumeMax;
   String? currentApp; // האפליקציה שפתוחה כרגע בטלוויזיה
   bool _appReported = false;
+  @override
   bool imeActive = false; // הטלוויזיה דיווחה על שדה הקלדה
+  @override
+  bool get reportsIme => true;
   DateTime? imeAt; // מתי נפתח לאחרונה שדה הקלדה בטלוויזיה
   int _imeCounter = 0;
   int _fieldCounter = 0;
@@ -41,8 +49,6 @@ class TvConnection extends ChangeNotifier {
   bool _disposed = false;
   bool _pairOk = false;
   String? _pairFail;
-
-  bool get isReady => status == TvStatus.ready;
 
   void _set(TvStatus s, {String? err}) {
     if (_disposed) return;
@@ -57,6 +63,7 @@ class TvConnection extends ChangeNotifier {
 
   // ---------- שליטה ----------
 
+  @override
   Future<void> connect() async {
     _retry?.cancel();
     _closeSockets();
@@ -222,8 +229,20 @@ class TvConnection extends ChangeNotifier {
   }
 
   /// אפשר לשלוח פקודות: מחובר, או שאפשר להתחבר מחדש אוטומטית
+  @override
   bool get canSend => tv.paired && status != TvStatus.pairing;
 
+  @override
+  void repair() {
+    tv.paired = false;
+    onPairedChanged();
+    startPairing();
+  }
+
+  @override
+  void sendText(String text) => sendImeText(text);
+
+  @override
   void sendKey(int code, {int direction = 3}) =>
       _send(Pb().msg(10, Pb().int32(1, code).int32(2, direction)));
 
@@ -241,6 +260,7 @@ class TvConnection extends ChangeNotifier {
 
   /// הדלקה/כיבוי
   /// 'off' – נשלח כיבוי, 'on' – נשלחה הדלקה, 'waking' – נשלח Wake-on-LAN, 'unreachable' – אין קשר
+  @override
   Future<String> power() async {
     if (isReady) {
       if (powered == false) {
@@ -287,6 +307,7 @@ class TvConnection extends ChangeNotifier {
   };
 
   /// פותח אפליקציה. 'link' – נפתחה ישירות, 'store' – נפתח דף האפליקציה בחנות
+  @override
   String launchApp(String pkg) {
     if (pkg.contains('://') || pkg.startsWith('intent:')) {
       sendAppLink(pkg);
@@ -317,6 +338,7 @@ class TvConnection extends ChangeNotifier {
   }
 
   /// מחכה שהחיבור יהיה מוכן (ומתחבר מחדש אם צריך)
+  @override
   Future<bool> waitReady({int ms = 7000}) async {
     if (isReady) return true;
     if (!canSend) return false;
@@ -332,7 +354,9 @@ class TvConnection extends ChangeNotifier {
   /// מחפש טקסט בתוך אפליקציה.
   /// 'link' – נשלח קישור חיפוש ישיר, 'typed' – החיפוש הוקלד בשדה החיפוש,
   /// 'no_field' – שדה החיפוש לא נפתח, 'offline' – אין חיבור
-  Future<String> searchIn(String pkg, String query, {bool preferLink = true}) async {
+  @override
+  Future<String> searchIn(AppButton app, String query, {bool preferLink = true}) async {
+    final pkg = app.package;
     if (!await waitReady()) return 'offline';
 
     if (preferLink && pkg == youtubePkg) {
@@ -479,6 +503,7 @@ class TvConnection extends ChangeNotifier {
     p?.destroy();
   }
 
+  @override
   void disconnect() {
     _retry?.cancel();
     _closeSockets();
