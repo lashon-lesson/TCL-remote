@@ -36,6 +36,7 @@ jobs:
           [ -f shorebird.yaml ] || perl -0pi -e 's/\n  assets:\n    - shorebird.yaml\n/\n/' pubspec.yaml
           V=$(grep '^version:' pubspec.yaml | awk '{print $2}' | tr -d '\r')
           printf "const appVersion = '%s';\nconst appBuild = %s;\n" "${V%%+*}" "${V##*+}" > lib/build_info.dart
+          printf "const appStamp = '%s';\n" "$(TZ=Asia/Jerusalem date +'%d/%m %H:%M')" >> lib/build_info.dart
           echo "VERSION=$V" >> $GITHUB_ENV
           echo "BUILD=${V##*+}" >> $GITHUB_ENV
 
@@ -137,6 +138,7 @@ jobs:
           [ -f shorebird.yaml ] || perl -0pi -e 's/\n  assets:\n    - shorebird.yaml\n/\n/' pubspec.yaml
           V=$(grep '^version:' pubspec.yaml | awk '{print $2}' | tr -d '\r')
           printf "const appVersion = '%s';\nconst appBuild = %s;\n" "${V%%+*}" "${V##*+}" > lib/build_info.dart
+          printf "const appStamp = '%s';\n" "$(TZ=Asia/Jerusalem date +'%d/%m %H:%M')" >> lib/build_info.dart
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
