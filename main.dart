@@ -46,7 +46,7 @@ class RemoteApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'שלט',
+      title: 'שלט־על',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -1402,7 +1402,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
                     if (_update != null) _updateBanner(),
                     _remote(),
                     const SizedBox(height: 10),
-                    Text('גרסה $appVersion ($appBuild)',
+                    Text('גרסה $appVersion · עודכן $appStamp',
                         style: const TextStyle(color: Color(0xFF55585F), fontSize: 10.5)),
                   ]),
                 ),

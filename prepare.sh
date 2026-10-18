@@ -15,7 +15,7 @@ M=android/app/src/main/AndroidManifest.xml
 if [ -f "$M" ]; then
   grep -q 'android.permission.INTERNET' "$M" || \
     perl -0pi -e 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>\n    <application#' "$M"
-  perl -0pi -e 's#android:label="[^"]*"#android:label="שלט TCL"#' "$M"
+  perl -0pi -e 's#android:label="[^"]*"#android:label="שלט־על"#' "$M"
   # מיקרופון ושירות זיהוי דיבור (פקודות קוליות)
   grep -q 'android.permission.RECORD_AUDIO' "$M" || \
     perl -0pi -e 's#<application#<uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <application#' "$M"
@@ -39,8 +39,8 @@ if [ -f "$P" ] && [ -x /usr/libexec/PlistBuddy ]; then
   done
   /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string השלט משתמש במיקרופון כדי לקבל פקודות קוליות" "$P"
   /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string זיהוי הדיבור הופך את הפקודה הקולית לטקסט" "$P"
-  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName שלט TCL" "$P" 2>/dev/null || \
-    /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string שלט TCL" "$P"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName שלט־על" "$P" 2>/dev/null || \
+    /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string שלט־על" "$P"
 fi
 
 # אייקונים

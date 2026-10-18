@@ -1,7 +1,7 @@
 name: tcl_remote
-description: שלט WiFi לטלוויזיות TCL (Google TV / Android TV)
+description: שלט WiFi לטלוויזיות TCL, סמסונג ו-LG
 publish_to: 'none'
-version: 1.1.0+2
+version: 1.2.0+3
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -28,5 +28,5 @@ flutter_launcher_icons:
   ios: true
   image_path: assets/icon.png
   remove_alpha_ios: true
-  adaptive_icon_background: "#1b1c20"
+  adaptive_icon_background: "#7B5CFF"
   adaptive_icon_foreground: assets/icon_fg.png
