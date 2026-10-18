@@ -1,6 +1,117 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
-import 'package:shared_preferences/shared_preferences.dart';
+/// שמירת ההגדרות בקובץ בטלפון (במקום התוסף shared_preferences, שלא עבד בגרסה הזו)
+class Prefs {
+  final File _file;
+  final Map<String, dynamic> _data;
+  Prefs._(this._file, this._data);
+
+  static Prefs? _inst;
+
+  static Future<Prefs> getInstance() async {
+    final cached = _inst;
+    if (cached != null) return cached;
+    final dir = await _findDir();
+    final f = File('${dir.path}/settings.json');
+    var d = <String, dynamic>{};
+    for (final path in [f.path, '${f.path}.bak']) {
+      try {
+        final x = File(path);
+        if (await x.exists()) {
+          d = Map<String, dynamic>.from(jsonDecode(await x.readAsString()) as Map);
+          break;
+        }
+      } catch (_) {}
+    }
+    return _inst = Prefs._(f, d);
+  }
+
+  /// תיקייה פרטית של האפליקציה שאפשר לכתוב בה
+  static Future<Directory> _findDir() async {
+    final candidates = <String>[];
+    if (Platform.isAndroid) {
+      var pkg = 'il.lior.tcl_remote';
+      try {
+        final cmd = await File('/proc/self/cmdline').readAsString();
+        final name = cmd.split('\u0000').first.split(':').first.trim();
+        if (name.isNotEmpty) pkg = name;
+      } catch (_) {}
+      candidates.addAll(['/data/user/0/$pkg/files/tcl', '/data/data/$pkg/files/tcl']);
+    } else {
+      final home = Platform.environment['HOME'];
+      if (home != null) candidates.add('$home/Library/Application Support/tcl');
+    }
+    candidates.add('${Directory.systemTemp.path}/tcl');
+    for (final c in candidates) {
+      try {
+        final d = Directory(c);
+        await d.create(recursive: true);
+        final t = File('$c/.w');
+        await t.writeAsString('1', flush: true);
+        return d;
+      } catch (_) {}
+    }
+    return Directory.systemTemp;
+  }
+
+  Future<bool> _chain = Future.value(true);
+
+  Future<bool> _save() {
+    final text = jsonEncode(_data);
+    return _chain = _chain.then((_) async {
+      try {
+        final tmp = File('${_file.path}.tmp');
+        await tmp.writeAsString(text, flush: true);
+        if (await _file.exists()) {
+          try {
+            await _file.copy('${_file.path}.bak');
+          } catch (_) {}
+        }
+        await tmp.rename(_file.path);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    });
+  }
+
+  String? getString(String k) {
+    final v = _data[k];
+    return v is String ? v : null;
+  }
+
+  bool? getBool(String k) {
+    final v = _data[k];
+    return v is bool ? v : null;
+  }
+
+  int? getInt(String k) {
+    final v = _data[k];
+    return v is int ? v : null;
+  }
+
+  Future<bool> setString(String k, String v) {
+    _data[k] = v;
+    return _save();
+  }
+
+  Future<bool> setBool(String k, bool v) {
+    _data[k] = v;
+    return _save();
+  }
+
+  Future<bool> setInt(String k, int v) {
+    _data[k] = v;
+    return _save();
+  }
+
+  Future<bool> remove(String k) {
+    _data.remove(k);
+    return _save();
+  }
+}
 
 class TvDevice {
   final String id;
@@ -39,7 +150,7 @@ List<AppButton> defaultApps() => [
     ];
 
 class Store {
-  final SharedPreferences prefs;
+  final Prefs prefs;
   Store(this.prefs);
 
   List<TvDevice> loadTvs() {

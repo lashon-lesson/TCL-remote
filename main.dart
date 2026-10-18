@@ -4,7 +4,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -125,7 +124,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
   }
 
   Future<void> _initInner() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await Prefs.getInstance();
     final s = Store(prefs);
     tvs = s.loadTvs();
     apps = s.loadApps();
@@ -1213,7 +1212,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
                   padding: const EdgeInsets.all(28),
                   child: _initError != null
                       ? Column(mainAxisSize: MainAxisSize.min, children: [
-                          const Icon(Icons.error_outline, color: C.red, size: 40),
+                          const Text('⚠️', style: TextStyle(fontSize: 38)),
                           const SizedBox(height: 14),
                           const Text('השלט לא הצליח לעלות',
                               style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),

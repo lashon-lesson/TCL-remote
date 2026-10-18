@@ -4,7 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:pointycastle/export.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../store.dart';
 
 import 'der.dart';
 
@@ -22,7 +22,7 @@ class Identity {
   static const _kId = 'identity_device_id';
   static const _kVer = 'identity_version';
 
-  static Future<Identity> loadOrCreate(SharedPreferences prefs) async {
+  static Future<Identity> loadOrCreate(Prefs prefs) async {
     var cert = prefs.getString(_kCert);
     var key = prefs.getString(_kKey);
     var id = prefs.getString(_kId);
