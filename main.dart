@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'atv/connection.dart';
 import 'atv/identity.dart';
 import 'atv/keys.dart';
+import 'build_info.dart';
 import 'scanner.dart';
 import 'store.dart';
 
@@ -90,6 +94,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _checkUpdate();
       for (final c in conns.values) {
         if (!c.isReady && c.status != TvStatus.pairing) c.connect();
       }
@@ -124,6 +129,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     if (tvs.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _showTvSheet());
     }
+    _checkUpdate();
   }
 
   void _open(TvDevice tv) {
@@ -234,6 +240,87 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     final r = c.launchApp(a.package);
     _toast(r == 'store' ? 'פותח את ${a.label} דרך החנות…' : 'פותח את ${a.label}…');
   }
+
+  // ---------- עדכון גרסה ----------
+
+  static const _repo = 'lashon-lesson/TCL-remote';
+  ({int build, String url, String name})? _update;
+  DateTime? _lastCheck;
+
+  /// בודק ב-GitHub אם יש גרסה מלאה חדשה (עדכונים קטנים מגיעים לבד דרך Shorebird)
+  Future<void> _checkUpdate() async {
+    if (!Platform.isAndroid) return;
+    final now = DateTime.now();
+    if (_lastCheck != null && now.difference(_lastCheck!).inMinutes < 30) return;
+    _lastCheck = now;
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+    try {
+      final req = await client.getUrl(Uri.parse('https://api.github.com/repos/$_repo/releases/latest'));
+      req.headers.set('Accept', 'application/vnd.github+json');
+      req.headers.set('User-Agent', 'tcl-remote-app');
+      final res = await req.close().timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return;
+      final body = await res.transform(utf8.decoder).join();
+      final j = jsonDecode(body) as Map<String, dynamic>;
+      final tag = '${j['tag_name'] ?? ''}';
+      final b = int.tryParse(tag.replaceAll(RegExp(r'[^0-9]'), ''));
+      if (b == null || b <= appBuild) return;
+      String? url;
+      for (final a in (j['assets'] as List? ?? const [])) {
+        if ('${a['name']}'.endsWith('.apk')) {
+          url = a['browser_download_url'] as String?;
+          break;
+        }
+      }
+      final u = url;
+      if (u == null || !mounted) return;
+      setState(() => _update = (build: b, url: u, name: '${j['name'] ?? tag}'));
+    } catch (_) {
+    } finally {
+      client.close();
+    }
+  }
+
+  void _showUpdate() {
+    final up = _update;
+    if (up == null) return;
+    _sheet((ctx, setS) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _title('יש גרסה חדשה של השלט'),
+          _hint('${up.name}\n\n'
+              'לחץ "הורד ועדכן". הקובץ יורד בדפדפן, וכשההורדה מסתיימת לוחצים "פתח" ואז "עדכון". '
+              'הטלוויזיות והצימוד נשמרים.'),
+          _primary('הורד ועדכן', () async {
+            Navigator.pop(ctx);
+            final ok = await launchUrl(Uri.parse(up.url), mode: LaunchMode.externalApplication)
+                .catchError((_) => false);
+            if (!ok && mounted) _toast('לא הצלחתי לפתוח את ההורדה');
+          }),
+          _ghost('אחר כך', () => Navigator.pop(ctx)),
+        ]));
+  }
+
+  Widget _updateBanner() => GestureDetector(
+        onTap: _showUpdate,
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 380),
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          decoration: BoxDecoration(
+            color: const Color(0xFF123526),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: C.green.withAlpha(140)),
+          ),
+          child: const Row(children: [
+            Icon(Icons.system_update, color: C.green, size: 20),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text('יש גרסה חדשה – לחץ לעדכון',
+                  style: TextStyle(color: C.green, fontWeight: FontWeight.w700, fontSize: 14)),
+            ),
+            Icon(Icons.chevron_left, color: C.green),
+          ]),
+        ),
+      );
 
   // ---------- חלונות ----------
 
@@ -1108,7 +1195,13 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
             : Center(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(12),
-                  child: _remote(),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    if (_update != null) _updateBanner(),
+                    _remote(),
+                    const SizedBox(height: 10),
+                    Text('גרסה $appVersion ($appBuild)',
+                        style: const TextStyle(color: Color(0xFF55585F), fontSize: 10.5)),
+                  ]),
                 ),
               ),
       ),

@@ -1,7 +1,7 @@
 name: tcl_remote
 description: שלט WiFi לטלוויזיות TCL (Google TV / Android TV)
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -13,12 +13,15 @@ dependencies:
   crypto: ^3.0.5
   pointycastle: ^3.9.1
   speech_to_text: ^7.0.0
+  url_launcher: ^6.2.0
 
 dev_dependencies:
   flutter_launcher_icons: ^0.14.1
 
 flutter:
   uses-material-design: true
+  assets:
+    - shorebird.yaml
 
 flutter_launcher_icons:
   android: true

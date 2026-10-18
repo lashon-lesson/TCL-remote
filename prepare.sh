@@ -21,9 +21,9 @@ if [ -f "$M" ]; then
     perl -0pi -e 's#<application#<uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <application#' "$M"
   if ! grep -q 'android.speech.RecognitionService' "$M"; then
     if grep -q '<queries>' "$M"; then
-      perl -0pi -e 's#<queries>#<queries>\n        <intent>\n            <action android:name="android.speech.RecognitionService" />\n        </intent>#' "$M"
+      perl -0pi -e 's#<queries>#<queries>\n        <intent>\n            <action android:name="android.speech.RecognitionService" />\n        </intent>\n        <intent>\n            <action android:name="android.intent.action.VIEW" />\n            <data android:scheme="https" />\n        </intent>#' "$M"
     else
-      perl -0pi -e 's#</manifest>#    <queries>\n        <intent>\n            <action android:name="android.speech.RecognitionService" />\n        </intent>\n    </queries>\n</manifest>#' "$M"
+      perl -0pi -e 's#</manifest>#    <queries>\n        <intent>\n            <action android:name="android.speech.RecognitionService" />\n        </intent>\n        <intent>\n            <action android:name="android.intent.action.VIEW" />\n            <data android:scheme="https" />\n        </intent>\n    </queries>\n</manifest>#' "$M"
     fi
   fi
 fi
