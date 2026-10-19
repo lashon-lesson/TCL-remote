@@ -914,16 +914,34 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
   void _showKeyboard() {
     final text = TextEditingController();
     Timer? debounce;
+    var sent = '';
     cur?.textReset();
 
     _sheet((ctx, setS) {
+      // טלוויזיות מקבלות רק את ההודעה הראשונה ברצף מהיר – לכן לא שולחים כל אות,
+      // אלא את כל הטקסט בהודעה אחת, כשמפסיקים להקליד לרגע (או בלחיצה על חפש)
+      bool flush() {
+        debounce?.cancel();
+        debounce = null;
+        final v = text.text;
+        final c = cur;
+        if (c == null || !c.isReady || v.isEmpty || v == sent) return false;
+        sent = v;
+        c.sendText(v);
+        return true;
+      }
+
       void live(String v) {
         debounce?.cancel();
-        debounce = Timer(const Duration(milliseconds: 180), () {
-          final c = cur;
-          if (c == null || !c.isReady || v.isEmpty) return;
-          c.sendText(v);
-        });
+        debounce = Timer(const Duration(milliseconds: 1000), flush);
+      }
+
+      void search() {
+        if (flush()) {
+          Timer(const Duration(milliseconds: 600), () => _key(K.enter));
+        } else {
+          _key(K.enter);
+        }
       }
 
       Future<void> asKeys() async {
@@ -966,9 +984,10 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
               hint: 'מה לחפש?',
               autofocus: true,
               onChanged: live,
-              onSubmit: (_) => _key(K.enter)),
+              onSubmit: (_) => search()),
+          _hint('הטקסט נשלח לטלוויזיה כשמפסיקים להקליד לשנייה, או בלחיצה על "חפש".'),
           Row(children: [
-            Expanded(flex: 2, child: _primary('חפש ↵', () => _key(K.enter))),
+            Expanded(flex: 2, child: _primary('חפש ↵', search)),
             const SizedBox(width: 8),
             Expanded(
               child: SizedBox(
@@ -987,7 +1006,14 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
                     final nv = v.characters.skipLast(1).toString();
                     text.text = nv;
                     if (nv.isEmpty) {
-                      _key(K.del);
+                      debounce?.cancel();
+                      final c = cur;
+                      if (c != null && sent.isNotEmpty) {
+                        c.clearText(sent.length);
+                      } else {
+                        _key(K.del);
+                      }
+                      sent = '';
                     } else {
                       live(nv);
                     }

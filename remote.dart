@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'atv/keys.dart';
 import 'store.dart';
 
 /// approve – מחכים שיאשרו את החיבור על מסך הטלוויזיה (סמסונג / LG)
@@ -53,6 +54,14 @@ abstract class TvRemote extends ChangeNotifier {
 
   /// מתחילים הקלדה חדשה (שדה ריק)
   void textReset() {}
+
+  /// מוחק את כל מה שנשלח לשדה (count תווים)
+  void clearText(int count) {
+    for (var i = 0; i < count; i++) {
+      sendKey(K.del);
+    }
+    textReset();
+  }
 
   /// פותח אפליקציה לפי המזהה שלה בטלוויזיה הזו. 'link' / 'store'
   String launchApp(String appId);

@@ -320,6 +320,9 @@ class LgConnection extends TvRemote {
   @override
   void textReset() => _typed = '';
 
+  @override
+  void clearText(int count) => sendText('');
+
   /// LG רק מוסיפה טקסט – מחשבים מה למחוק ומה להוסיף לעומת מה שכבר נכתב
   @override
   void sendText(String text) {

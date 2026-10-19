@@ -256,6 +256,8 @@ class TvConnection extends TvRemote {
             3,
             Pb().int32(1, 1).msg(
                 2, Pb().int32(1, pos).int32(2, pos).str(3, text)))));
+    // הטלוויזיה דוחה עריכה חוזרת עם אותו מונה; אם היא עונה – המונה שלה מחליף את זה
+    _imeCounter++;
   }
 
   /// הדלקה/כיבוי

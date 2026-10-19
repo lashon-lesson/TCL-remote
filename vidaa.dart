@@ -651,20 +651,28 @@ class VidaaConnection extends TvRemote {
         _pub(_t('platform_service', 'bwsinputdata'), p);
       });
 
+  // כל הטקסט נשלח בהודעה אחת (מסך ההקלדה מחכה שמפסיקים להקליד)
+  String _sent = '';
+
   @override
-  void textReset() => _typed = '';
+  void textReset() {
+    _typed = '';
+    _sent = '';
+  }
+
+  @override
+  void clearText(int count) {
+    if (_sent.isNotEmpty) _txt('', 'clear');
+    textReset();
+  }
 
   @override
   void sendText(String text) {
-    final prev = _typed;
     _typed = text;
-    if (text.startsWith(prev)) {
-      final add = text.substring(prev.length);
-      if (add.isNotEmpty) _txt(add, 'insert');
-    } else {
-      _txt('', 'clear');
-      if (text.isNotEmpty) _txt(text, 'insert');
-    }
+    if (text == _sent) return;
+    if (_sent.isNotEmpty) _txt('', 'clear');
+    if (text.isNotEmpty) _txt(text, 'insert');
+    _sent = text;
   }
 
   // ---------- אפליקציות ----------
