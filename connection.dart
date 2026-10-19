@@ -297,16 +297,34 @@ class TvConnection extends TvRemote {
     _imeCounter++;
   }
 
+  /// מדליק: WAKEUP, ואם הטלוויזיה לא דיווחה שנדלקה – "בית" (חלק מטלוויזיות TCL מתעלמות מ־WAKEUP)
+  Future<String> _turnOn() async {
+    sendKey(224);
+    for (var i = 0; i < 6; i++) {
+      await Future.delayed(const Duration(milliseconds: 150));
+      if (powered == true) return 'on';
+    }
+    sendKey(3);
+    return 'on';
+  }
+
+  /// מחכה רגע לדיווח מהטלוויזיה אם היא דלוקה או בהמתנה
+  Future<void> _waitPowerState() async {
+    for (var i = 0; i < 8 && powered == null; i++) {
+      await Future.delayed(const Duration(milliseconds: 125));
+    }
+  }
+
   /// הדלקה/כיבוי
   /// 'off' – נשלח כיבוי, 'on' – נשלחה הדלקה, 'waking' – נשלח Wake-on-LAN, 'unreachable' – אין קשר
   @override
   Future<String> power() async {
     if (isReady) {
-      if (powered == false) {
-        sendKey(224); // WAKEUP – מדליק בלי סיכון לכבות
-        return 'on';
-      }
+      await _waitPowerState();
+      if (powered != true) return _turnOn();
       sendKey(26);
+      powered = false;
+      notifyListeners();
       return 'off';
     }
 
@@ -323,9 +341,10 @@ class TvConnection extends TvRemote {
       await Future.delayed(const Duration(milliseconds: 250));
       if (_disposed) return 'unreachable';
       if (isReady) {
-        await Future.delayed(const Duration(milliseconds: 400));
-        sendKey(224); // WAKEUP
-        return 'on';
+        await Future.delayed(const Duration(milliseconds: 300));
+        await _waitPowerState();
+        if (powered == true) return 'on';
+        return _turnOn();
       }
       if (dialed) {
         // הטלוויזיה התעוררה דרך "שידור" ליוטיוב. כשהחיבור יחזור – חוזרים למסך הבית
