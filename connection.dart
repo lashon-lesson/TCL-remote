@@ -65,6 +65,7 @@ class TvConnection extends TvRemote {
 
   bool _connectingNow = false;
   bool _waking = false;
+  DateTime? _homeAfterWake;
 
   @override
   Future<void> connect() async {
@@ -120,6 +121,11 @@ class TvConnection extends TvRemote {
       _fails = 0;
       _set(TvStatus.ready);
       _flushPending();
+      final w = _homeAfterWake;
+      if (w != null && DateTime.now().difference(w).inSeconds < 60) {
+        _homeAfterWake = null;
+        Timer(const Duration(seconds: 3), () => sendKey(3)); // מסך הבית במקום יוטיוב
+      }
       if (tv.mac == null) _findMac();
     } else if (f.has(2)) {
       _raw(Pb().msg(2, Pb().int32(1, 622)));
@@ -319,9 +325,15 @@ class TvConnection extends TvRemote {
       if (isReady) {
         await Future.delayed(const Duration(milliseconds: 400));
         sendKey(224); // WAKEUP
-        if (dialed) {
-          // ה"שידור" פתח יוטיוב – חוזרים למסך הבית
-          Timer(const Duration(seconds: 4), () => sendKey(3));
+        return 'on';
+      }
+      if (dialed) {
+        // הטלוויזיה התעוררה דרך "שידור" ליוטיוב. כשהחיבור יחזור – חוזרים למסך הבית
+        _homeAfterWake = DateTime.now();
+        for (final s in [2, 5, 9, 14, 20, 30]) {
+          Timer(Duration(seconds: s), () {
+            if (!_disposed && !isReady && status != TvStatus.pairing && !_connectingNow) connect();
+          });
         }
         return 'on';
       }
@@ -330,8 +342,8 @@ class TvConnection extends TvRemote {
         if (mac != null) wakeOnLan(mac, tv.host);
         if (!isReady && status != TvStatus.pairing && !_connectingNow) connect();
       }
-      // אחרי 5 שניות בלי תשובה: "שידור" ליוטיוב – מעיר הרבה טלוויזיות Google TV
-      if (t == 20 && !dialed) {
+      // אחרי 3 שניות בלי תשובה: "שידור" ליוטיוב – מעיר הרבה טלוויזיות Google TV
+      if (t == 12 && !dialed) {
         dialLaunch(tv.host, 'YouTube').then((ok) {
           if (ok) dialed = true;
         });
