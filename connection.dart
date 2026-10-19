@@ -39,8 +39,12 @@ class TvConnection extends TvRemote {
   @override
   bool get reportsIme => true;
   DateTime? imeAt; // מתי נפתח לאחרונה שדה הקלדה בטלוויזיה
+  // מונים שהטלוויזיה שלחה בהודעת עריכה (כמו בספריות הקוד הפתוח), ומונים מהודעות פתיחת המקלדת.
+  // לא ידוע בוודאות איזה זוג הטלוויזיה מצפה לקבל – שולחים עם שניהם
   int _imeCounter = 0;
   int _fieldCounter = 0;
+  int _injCounter = 0;
+  int _injField = 0;
 
   SecureSocket? _remote;
   SecureSocket? _pair;
@@ -137,9 +141,9 @@ class TvConnection extends TvRemote {
       final inject = f.msg(20);
       final app = inject?.msg(1);
       final field = inject?.msg(2);
-      if (app != null) _imeCounter = app.int32(1, _imeCounter);
+      if (app != null) _injCounter = app.int32(1, _injCounter);
       if (field != null) {
-        _fieldCounter = field.int32(1, _fieldCounter);
+        _injField = field.int32(1, _injField);
         imeActive = true;
         imeAt = DateTime.now();
       }
@@ -158,7 +162,7 @@ class TvConnection extends TvRemote {
       notifyListeners();
     } else if (f.has(22)) {
       final field = f.msg(22)?.msg(2);
-      if (field != null) _fieldCounter = field.int32(1, _fieldCounter);
+      if (field != null) _injField = field.int32(1, _injField);
       imeActive = true;
       imeAt = DateTime.now();
       notifyListeners();
@@ -294,15 +298,22 @@ class TvConnection extends TvRemote {
   void sendImeText(String text) {
     if (text.isEmpty) return;
     final pos = text.length - 1;
-    _send(Pb().msg(
-        21,
-        Pb().int32(1, _imeCounter).int32(2, _fieldCounter).msg(
-            3,
-            Pb().int32(1, 1).msg(
-                2, Pb().int32(1, pos).int32(2, pos).str(3, text)))));
-    // הטלוויזיה דוחה עריכה חוזרת עם אותו מונה; אם היא עונה – המונה שלה מחליף את זה
-    _imeCounter++;
+    final pairs = <(int, int)>{
+      (_imeCounter, _fieldCounter),
+      (_injCounter, _injField),
+      (_imeCounter, _injField),
+      (_injCounter, _fieldCounter),
+    };
+    for (final (ime, field) in pairs) {
+      _send(Pb().msg(
+          21,
+          Pb().int32(1, ime).int32(2, field).msg(
+              3,
+              Pb().int32(1, 1).msg(
+                  2, Pb().int32(1, pos).int32(2, pos).str(3, text)))));
+    }
   }
+
 
   /// מדליק: WAKEUP, ואם הטלוויזיה לא דיווחה שנדלקה – "בית" (חלק מטלוויזיות TCL מתעלמות מ־WAKEUP)
   Future<String> _turnOn() async {
