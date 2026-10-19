@@ -112,6 +112,7 @@ class TvConnection extends TvRemote {
       _fails = 0;
       _set(TvStatus.ready);
       _flushPending();
+      if (tv.mac == null) _findMac();
     } else if (f.has(2)) {
       _raw(Pb().msg(2, Pb().int32(1, 622)));
     } else if (f.has(8)) {
@@ -233,6 +234,28 @@ class TvConnection extends TvRemote {
   bool get canSend => tv.paired && status != TvStatus.pairing;
 
   @override
+  /// טלוויזיות עם Chromecast מובנה מוסרות את כתובת ה־MAC בפורט 8008
+  Future<void> _findMac() async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+    try {
+      final req = await client.getUrl(
+          Uri.parse('http://${tv.host}:8008/setup/eureka_info?params=device_info,net'));
+      final res = await req.close().timeout(const Duration(seconds: 3));
+      final body = await res.transform(utf8.decoder).join().timeout(const Duration(seconds: 3));
+      final found = RegExp(r'"(?:mac_address|macAddress|ethernet_mac_address|wifi_mac)"\s*:\s*"([^"]+)"')
+          .allMatches(body)
+          .map((m) => m.group(1));
+      final merged = mergeMacs(tv.mac, found);
+      if (merged != null) {
+        tv.mac = merged;
+        onPairedChanged();
+      }
+    } catch (_) {
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   void repair() {
     tv.paired = false;
     onPairedChanged();
@@ -535,14 +558,20 @@ class TvConnection extends TvRemote {
 
 /// שליחת "חבילת קסם" להדלקת הטלוויזיה (Wake-on-LAN)
 Future<bool> wakeOnLan(String mac, String host) async {
-  final parts = mac.split(RegExp('[:-]'));
-  if (parts.length != 6) return false;
-  final m = parts.map((h) => int.parse(h, radix: 16)).toList();
-  final packet = <int>[...List.filled(6, 0xff), for (var i = 0; i < 16; i++) ...m];
+  final macs = macList(mac);
+  if (macs.isEmpty) return false;
+  final packets = [
+    for (final one in macs)
+      () {
+        final m = one.split(':').map((h) => int.parse(h, radix: 16)).toList();
+        return <int>[...List.filled(6, 0xff), for (var i = 0; i < 16; i++) ...m];
+      }()
+  ];
   final p = host.split('.');
   final targets = <String>[
     '255.255.255.255',
     if (p.length == 4) '${p[0]}.${p[1]}.${p[2]}.255',
+    if (p.length == 4) '${p[0]}.${p[1]}.255.255',
     host,
   ];
   var sent = false;
@@ -550,15 +579,18 @@ Future<bool> wakeOnLan(String mac, String host) async {
   try {
     sock = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
     sock.broadcastEnabled = true;
-    for (var round = 0; round < 3; round++) {
-      for (final t in targets) {
-        for (final port in [9, 7]) {
-          try {
-            if (sock.send(packet, InternetAddress(t), port) > 0) sent = true;
-          } catch (_) {}
+    // כרטיס רשת "ישן" לפעמים מפספס את החבילות הראשונות – שולחים במשך כ־3 שניות
+    for (var round = 0; round < 10; round++) {
+      for (final packet in packets) {
+        for (final t in targets) {
+          for (final port in [9, 7]) {
+            try {
+              if (sock.send(packet, InternetAddress(t), port) > 0) sent = true;
+            } catch (_) {}
+          }
         }
       }
-      await Future.delayed(const Duration(milliseconds: 150));
+      await Future.delayed(const Duration(milliseconds: 300));
     }
   } catch (_) {
   } finally {

@@ -259,7 +259,11 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         _toast('מדליק את ${c.tv.name}…');
         break;
       case 'waking':
-        _toast('נשלחה פקודת הדלקה ל${c.tv.name}. אם לא נדלקה, ראה הוראות ההדלקה בהגדרות הטלוויזיה');
+        _toast('שולח פקודת הדלקה ל${c.tv.name}…');
+        // אם אחרי חצי דקה היא עדיין לא עונה – מסבירים מה להפעיל בטלוויזיה
+        Timer(const Duration(seconds: 30), () {
+          if (mounted && cur == c && !c.isReady) _powerHelp(c);
+        });
         break;
       case 'unreachable':
         _toast(c.tv.mac == null
@@ -805,19 +809,49 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         ]));
   }
 
+  void _powerHelp(TvRemote c) {
+    final tv = c.tv;
+    final steps = switch (tv.brand) {
+      'samsung' => 'הגדרות ← כללי ← רשת ← הגדרות מומחה ← להפעיל "הפעלה באמצעות נייד" (Power On with Mobile).',
+      'lg' => 'הגדרות ← כללי ← התקנים ← ניהול טלוויזיה (או: חיבור) ← להפעיל "הפעלה דרך Wi‑Fi" (Turn on via Wi‑Fi). בדגמים ישנים: "Mobile TV On".',
+      'vidaa' => 'הגדרות ← רשת (Network) ← להפעיל "Wake on LAN" וגם "Wake on Wireless Network".',
+      _ => 'הגדרות ← מערכת ← צריכת חשמל ואנרגיה (Power & Energy) ← להפעיל "המתנה ברשת" / "Network standby" / "Wake on LAN". אם יש "הפעלה מהירה" (Quick start) – להפעיל גם אותה.',
+    };
+    final macs = macList(tv.mac);
+    _sheet((ctx, setS) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _title('${tv.name} לא נדלקה'),
+          _hint('פקודת ההדלקה נשלחה, אבל הטלוויזיה לא הגיבה. כמעט תמיד הסיבה היא הגדרה כבויה בטלוויזיה. כשהטלוויזיה דלוקה, היכנס בה ל:'),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(steps, style: const TextStyle(fontSize: 15, height: 1.5)),
+          ),
+          _hint('השמות משתנים קצת בין דגמים. אחרי ההפעלה: כבה את הטלוויזיה בשלט שלה (לא מהשקע), חכה דקה ונסה שוב.'),
+          _hint(macs.isEmpty
+              ? 'אין לטלוויזיה כתובת MAC שמורה.'
+              : 'כתובת MAC שמורה: ${macs.join('  ·  ')}. בדוק שהיא זהה לכתובת שבהגדרות הטלוויזיה (רשת ← מידע).'),
+          _primary('הבנתי', () => Navigator.pop(ctx)),
+          _ghost('ערוך כתובת MAC', () {
+            Navigator.pop(ctx);
+            _editMac(tv);
+          }),
+        ]));
+  }
+
   void _editMac(TvDevice tv) {
     final mac = TextEditingController(text: tv.mac ?? '');
     _sheet((ctx, setS) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _title('כתובת MAC של ${tv.name}'),
-          _hint('נדרשת רק כדי להדליק טלוויזיה שכבויה לגמרי. בטלוויזיה: הגדרות ← רשת ואינטרנט ← הרשת המחוברת (או: הגדרות ← מערכת ← מידע ← סטטוס) ← "כתובת MAC" של ה-WiFi.'),
+          _hint('נדרשת רק כדי להדליק טלוויזיה שכבויה לגמרי. בטלוויזיה: הגדרות ← רשת ← מידע / סטטוס ← "כתובת MAC". אפשר לרשום כמה כתובות (WiFi וכבל) מופרדות בפסיק.'),
           _field(mac, hint: 'AA:BB:CC:DD:EE:FF', ltr: true, caps: TextCapitalization.characters),
           _primary('שמור', () {
-            final v = mac.text.trim().toUpperCase().replaceAll('-', ':');
-            if (v.isNotEmpty && !RegExp(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$').hasMatch(v)) {
+            final raw = mac.text.trim();
+            final list = macList(raw);
+            final parts = raw.split(RegExp(r'[,;\s]+')).where((p) => p.isNotEmpty).length;
+            if (raw.isNotEmpty && list.length != parts) {
               _toast('כתובת MAC לא תקינה');
               return;
             }
-            tv.mac = v.isEmpty ? null : v;
+            tv.mac = list.isEmpty ? null : list.join(',');
             store!.saveTvs(tvs);
             Navigator.pop(ctx);
             _toast('נשמר');

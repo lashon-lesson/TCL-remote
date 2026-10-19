@@ -34,14 +34,8 @@ Future<VidaaInfo?> vidaaInfo(String ip) async {
         RegExp('<$t>([^<]*)</$t>').firstMatch(xml)?.group(1)?.trim();
     String? kv(String k) =>
         RegExp('$k\\s*[=:]\\s*([^\\s<&]+)', caseSensitive: false).firstMatch(xml)?.group(1);
-    String? mac;
-    for (final k in ['macWifi', 'macEthernet']) {
-      final v = kv(k);
-      if (v != null && RegExp(r'^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$').hasMatch(v)) {
-        mac = v.toUpperCase().replaceAll('-', ':');
-        break;
-      }
-    }
+    final macs = macList([kv('macEthernet'), kv('macWifi')].whereType<String>().join(','));
+    final mac = macs.isEmpty ? null : macs.join(',');
     final proto = int.tryParse(kv('transport_protocol') ?? '');
     final name = tag('friendlyName') ?? tag('modelName') ?? '';
     return (name: name, brand: kv('brand')?.toLowerCase(), protocol: proto, mac: mac);
@@ -369,8 +363,9 @@ class VidaaConnection extends TvRemote {
 
     // 2. צימוד חדש
     final info = await vidaaInfo(tv.host);
-    if (info?.mac != null && tv.mac == null) {
-      tv.mac = info!.mac;
+    final merged = mergeMacs(tv.mac, [info?.mac]);
+    if (merged != null) {
+      tv.mac = merged;
       onSave();
     }
     final brands = <String>{
@@ -433,6 +428,13 @@ class VidaaConnection extends TvRemote {
     if (paired) {
       _ready();
       _pub(_t('ui_service', 'gettvstate'));
+      vidaaInfo(tv.host).then((i) {
+        final merged = mergeMacs(tv.mac, [i?.mac]);
+        if (merged != null && !_disposed) {
+          tv.mac = merged;
+          onSave();
+        }
+      });
     } else {
       // מבקשים מהטלוויזיה להציג קוד
       _pub(_t('ui_service', 'vidaa_app_connect'),

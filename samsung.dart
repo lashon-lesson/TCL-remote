@@ -171,8 +171,9 @@ class SamsungConnection extends TvRemote {
 
   Future<void> _refreshMac() async {
     final info = await samsungInfo(tv.host);
-    if (info?.mac != null && info!.mac != tv.mac) {
-      tv.mac = info.mac;
+    final merged = mergeMacs(tv.mac, [info?.mac]);
+    if (merged != null) {
+      tv.mac = merged;
       onSave();
     }
   }

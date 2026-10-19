@@ -181,18 +181,17 @@ class LgConnection extends TvRemote {
       }
     }
     // כתובת MAC להדלקה
-    if (tv.mac == null) {
+    // גם של ה־WiFi וגם של הכבל – לא תמיד ידוע באיזה הטלוויזיה מחוברת
+    {
       final info = await _request('ssap://com.webos.service.connectionmanager/getinfo');
-      String? mac;
-      for (final k in ['wifiInfo', 'wiredInfo']) {
+      final found = <String?>[];
+      for (final k in ['wiredInfo', 'wifiInfo']) {
         final x = info[k];
-        if (x is Map && x['macAddress'] is String && (x['macAddress'] as String).length >= 17) {
-          mac = (x['macAddress'] as String).toUpperCase();
-          break;
-        }
+        if (x is Map && x['macAddress'] is String) found.add(x['macAddress'] as String);
       }
-      if (mac != null) {
-        tv.mac = mac;
+      final merged = mergeMacs(tv.mac, found);
+      if (merged != null) {
+        tv.mac = merged;
         onSave();
       }
     }

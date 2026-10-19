@@ -282,3 +282,24 @@ class Store {
   set selected(String? id) =>
       id == null ? prefs.remove('selected') : prefs.setString('selected', id);
 }
+
+
+/// כתובות MAC תקינות מתוך טקסט (אפשר כמה, מופרדות בפסיק)
+List<String> macList(String? s) => [
+      for (final m in (s ?? '').toUpperCase().replaceAll('-', ':').split(RegExp(r'[,;\s]+')))
+        if (RegExp(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$').hasMatch(m)) m
+    ];
+
+/// מוסיף כתובות שנמצאו לכתובות הקיימות. null אם לא השתנה כלום
+String? mergeMacs(String? old, Iterable<String?> found) {
+  final list = macList(old);
+  var changed = false;
+  for (final f in found) {
+    for (final m in macList(f)) {
+      if (m == '00:00:00:00:00:00' || list.contains(m)) continue;
+      list.add(m);
+      changed = true;
+    }
+  }
+  return changed ? list.join(',') : null;
+}
