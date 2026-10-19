@@ -1,4 +1,4 @@
-// שכבה משותפת לכל סוגי הטלוויזיות: Android TV / Google TV (TCL), סמסונג ו-LG
+// שכבה משותפת לכל סוגי הטלוויזיות: Android TV / Google TV (TCL), סמסונג, LG ו-VIDAA (טושיבה)
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -33,6 +33,17 @@ abstract class TvRemote extends ChangeNotifier {
 
   /// צימוד / אישור מחדש
   void repair();
+
+  /// הצימוד נעשה בהקלדת קוד שמופיע על הטלוויזיה (Android TV, VIDAA)
+  bool get usesCode => false;
+  int get codeLength => 6;
+  bool get codeHex => true;
+
+  /// הטלוויזיה בודקת את הקוד בעצמה – מחכים לתשובה לפני שסוגרים את החלון
+  bool get codeChecksLater => false;
+
+  /// שולח את הקוד שהוקלד. false אם הקוד לא תקין
+  bool submitCode(String input) => false;
 
   /// מקש לפי קודי המקשים של Android (K.*) – כל סוג טלוויזיה מתרגם לשפה שלו
   void sendKey(int code, {int direction = 3});

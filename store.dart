@@ -113,12 +113,13 @@ class Prefs {
   }
 }
 
-/// סוגי טלוויזיות: 'atv' – Android TV / Google TV (TCL ועוד), 'samsung', 'lg'
-const brands = ['atv', 'samsung', 'lg'];
+/// סוגי טלוויזיות: 'atv' – Android TV / Google TV (TCL ועוד), 'samsung', 'lg', 'vidaa' – טושיבה / הייסנס
+const brands = ['atv', 'samsung', 'lg', 'vidaa'];
 
 String brandName(String b) => switch (b) {
       'samsung' => 'Samsung',
       'lg' => 'LG',
+      'vidaa' => 'Toshiba / VIDAA',
       _ => 'TCL / Android TV',
     };
 
@@ -142,6 +143,7 @@ class TvDevice {
   String get brandLabel => switch (brand) {
         'samsung' => 'SAMSUNG',
         'lg' => 'LG',
+        'vidaa' => 'TOSHIBA',
         _ => 'TCL',
       };
 
@@ -175,6 +177,10 @@ const _brandAppIds = {
     'youtube': 'youtube.leanback.v4',
     'netflix': 'netflix',
     'spotify': 'spotify-beehive',
+  },
+  'vidaa': {
+    'youtube': 'youtube',
+    'netflix': 'netflix',
   },
 };
 

@@ -1,9 +1,10 @@
-// חיפוש טלוויזיות ברשת: Android TV (פורט 6466), סמסונג (8001) ו-LG (3000/3001)
+// חיפוש טלוויזיות ברשת: Android TV (פורט 6466), סמסונג (8001), LG (3000/3001) ו-VIDAA (36669)
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
 import 'samsung.dart';
+import 'vidaa.dart';
 
 typedef FoundTv = ({String ip, String brand, String name});
 
@@ -24,12 +25,17 @@ Future<FoundTv?> detectTv(String ip, {int ms = 700}) async {
     _open(ip, 8001, ms: ms),
     _open(ip, 3000, ms: ms),
     _open(ip, 3001, ms: ms),
+    _open(ip, vidaaPort, ms: ms),
   ]);
   if (r[1]) {
     final info = await samsungInfo(ip);
     if (info != null) return (ip: ip, brand: 'samsung', name: info.name);
   }
   if (r[0]) return (ip: ip, brand: 'atv', name: '');
+  if (r[4]) {
+    final info = await vidaaInfo(ip);
+    return (ip: ip, brand: 'vidaa', name: info?.name ?? '');
+  }
   if (r[2] || r[3]) return (ip: ip, brand: 'lg', name: 'LG TV');
   return null;
 }

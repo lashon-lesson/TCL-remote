@@ -16,6 +16,7 @@ import 'remote.dart';
 import 'samsung.dart';
 import 'scanner.dart';
 import 'store.dart';
+import 'vidaa.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -162,6 +163,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     final TvRemote c = switch (tv.brand) {
       'samsung' => SamsungConnection(tv, save),
       'lg' => LgConnection(tv, save),
+      'vidaa' => VidaaConnection(tv, save),
       _ => TvConnection(tv, identity!, save),
     };
     c.addListener(() => _onConnChange(c));
@@ -176,7 +178,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         (c.status == TvStatus.pairing || c.status == TvStatus.approve) &&
         _pairPromptFor != c.tv.id) {
       _pairPromptFor = c.tv.id;
-      if (c is TvConnection && c.status == TvStatus.pairing) {
+      if (c.usesCode && c.status == TvStatus.pairing) {
         _showPairSheet(c);
       } else {
         _showApproveSheet(c);
@@ -217,7 +219,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
       return null;
     }
     if (!c.isReady) {
-      if (c.status == TvStatus.pairing && c is TvConnection) {
+      if (c.status == TvStatus.pairing && c.usesCode) {
         _showPairSheet(c);
         return null;
       }
@@ -494,7 +496,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         _select(tv.id);
         _open(tv);
         Navigator.pop(ctx);
-        _toast(brand == 'atv'
+        _toast(brand == 'atv' || brand == 'vidaa'
             ? 'מתחבר… בעוד רגע יופיע קוד על הטלוויזיה'
             : 'מתחבר… אשר את החיבור על מסך הטלוויזיה');
       }
@@ -702,46 +704,81 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         ));
   }
 
-  void _showPairSheet(TvConnection c) {
+  void _showPairSheet(TvRemote c) {
     final code = TextEditingController();
+    final len = c.codeLength;
+    final later = c.codeChecksLater;
     String? err;
-    _sheet((ctx, setS) {
-      void submit() {
-        if (c.submitCode(code.text)) {
-          Navigator.pop(ctx);
-          _toast('מצמד…');
-        } else {
-          setS(() => err = c.status == TvStatus.pairing
-              ? 'הקוד לא תואם. בדוק ונסה שוב'
-              : 'הבקשה פגה. לחץ על שם הטלוויזיה ← צמד מחדש');
-        }
-      }
+    var closed = false;
+    _sheet((ctx, setS) => ListenableBuilder(
+          listenable: c,
+          builder: (ctx, _) {
+            if (c.isReady && !closed) {
+              closed = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (ctx.mounted) Navigator.pop(ctx);
+              });
+            }
+            void submit() {
+              if (c.submitCode(code.text)) {
+                if (later) {
+                  setS(() => err = null);
+                } else {
+                  closed = true;
+                  Navigator.pop(ctx);
+                  _toast('מצמד…');
+                }
+              } else {
+                setS(() => err = later
+                    ? 'הקלד את $len הספרות שעל המסך'
+                    : c.status == TvStatus.pairing
+                        ? 'הקוד לא תואם. בדוק ונסה שוב'
+                        : 'הבקשה פגה. לחץ על שם הטלוויזיה ← צמד מחדש');
+              }
+            }
 
-      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        _title('צימוד ל${c.tv.name}'),
-        _hint('על מסך הטלוויזיה מופיע קוד בן 6 תווים. הקלד אותו כאן.'),
-        _field(code,
-            ltr: true,
-            autofocus: true,
-            maxLength: 6,
-            align: TextAlign.center,
-            caps: TextCapitalization.characters,
-            formatters: [
-              FilteringTextInputFormatter.allow(RegExp('[0-9a-fA-F]')),
-              TextInputFormatter.withFunction(
-                  (o, n) => n.copyWith(text: n.text.toUpperCase())),
-            ],
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: 8),
-            onSubmit: (_) => submit()),
-        if (err != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Text(err!, style: const TextStyle(color: C.red, fontSize: 13.5)),
-          ),
-        _primary('אשר צימוד', submit),
-        _ghost('ביטול', () => Navigator.pop(ctx)),
-      ]);
-    });
+            final checking = later && c.status == TvStatus.connecting;
+            final shown = err ?? (later && c.status == TvStatus.pairing ? c.error : null);
+            return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              _title('צימוד ל${c.tv.name}'),
+              _hint(c.codeHex
+                  ? 'על מסך הטלוויזיה מופיע קוד בן $len תווים. הקלד אותו כאן.'
+                  : 'על מסך הטלוויזיה מופיע קוד בן $len ספרות. הקלד אותו כאן.'),
+              _field(code,
+                  ltr: true,
+                  autofocus: true,
+                  maxLength: len,
+                  align: TextAlign.center,
+                  type: c.codeHex ? null : TextInputType.number,
+                  caps: TextCapitalization.characters,
+                  formatters: [
+                    FilteringTextInputFormatter.allow(RegExp(c.codeHex ? '[0-9a-fA-F]' : '[0-9]')),
+                    TextInputFormatter.withFunction(
+                        (o, n) => n.copyWith(text: n.text.toUpperCase())),
+                  ],
+                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700, letterSpacing: 8),
+                  onSubmit: (_) => submit()),
+              if (shown != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(shown, style: const TextStyle(color: C.red, fontSize: 13.5)),
+                ),
+              if (checking)
+                const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: Center(child: CircularProgressIndicator(color: C.green)),
+                ),
+              _primary('אשר צימוד', submit),
+              if (later)
+                _ghost('קוד חדש', () {
+                  code.clear();
+                  setS(() => err = null);
+                  c.repair();
+                }),
+              _ghost('ביטול', () => Navigator.pop(ctx)),
+            ]);
+          },
+        ));
   }
 
   void _renameTv(TvDevice tv) {

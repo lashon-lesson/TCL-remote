@@ -481,6 +481,10 @@ class TvConnection extends TvRemote {
   }
 
   /// מחזיר false אם הקוד שגוי (אפשר לנסות שוב)
+  @override
+  bool get usesCode => true;
+
+  @override
   bool submitCode(String input) {
     final code = input.trim().toUpperCase();
     if (!RegExp(r'^[0-9A-F]{6}$').hasMatch(code)) return false;
