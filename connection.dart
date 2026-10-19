@@ -359,7 +359,15 @@ class TvConnection extends TvRemote {
     final pkg = app.package;
     if (!await waitReady()) return 'offline';
 
-    if (preferLink && pkg == youtubePkg) {
+    if (pkg == youtubePkg) {
+      // מנגנים ישר את התוצאה הראשונה (מוצאים אותה מהטלפון)
+      if (preferLink) {
+        final v = await findYoutubeVideo(query);
+        if (v != null) {
+          sendAppLink('https://www.youtube.com/watch?v=$v');
+          return 'video';
+        }
+      }
       sendAppLink('https://www.youtube.com/results?search_query=${Uri.encodeQueryComponent(query)}');
       return 'link';
     }

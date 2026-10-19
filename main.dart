@@ -630,7 +630,9 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
               icon: const Icon(Icons.more_vert, color: C.muted),
               color: const Color(0xFF2B2D33),
               onSelected: (v) async {
-                if (v == 're') {
+                if (v == 'name') {
+                  _renameTv(tv);
+                } else if (v == 're') {
                   c?.connect();
                 } else if (v == 'pair') {
                   _pairPromptFor = null;
@@ -659,6 +661,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
                 }
               },
               itemBuilder: (_) => const [
+                PopupMenuItem(value: 'name', child: Text('שנה שם')),
                 PopupMenuItem(value: 're', child: Text('חבר מחדש')),
                 PopupMenuItem(value: 'pair', child: Text('צמד / אשר מחדש')),
                 PopupMenuItem(value: 'mac', child: Text('כתובת MAC להדלקה')),
@@ -739,6 +742,30 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         _ghost('ביטול', () => Navigator.pop(ctx)),
       ]);
     });
+  }
+
+  void _renameTv(TvDevice tv) {
+    final name = TextEditingController(text: tv.name);
+    void save() {
+      final v = name.text.trim();
+      if (v.isEmpty) return;
+      setState(() => tv.name = v);
+      store!.saveTvs(tvs);
+    }
+
+    _sheet((ctx, setS) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _title('שם הטלוויזיה'),
+          _hint('למשל: סלון, חדר שינה, חדר ילדים'),
+          _field(name, hint: 'שם', onSubmit: (_) {
+            save();
+            Navigator.pop(ctx);
+          }),
+          _primary('שמור', () {
+            save();
+            Navigator.pop(ctx);
+          }),
+          _ghost('ביטול', () => Navigator.pop(ctx)),
+        ]));
   }
 
   void _editMac(TvDevice tv) {
@@ -1014,7 +1041,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
           return 'לכפתור ${a.label} עדיין לא הוגדרה אפליקציה';
         }
         final q = cmd.query!;
-        final r = await c.searchIn(a, q, preferLink: ytMode != 'type');
+        final r = await c.searchIn(a, q, preferLink: ytMode != 'list');
         switch (r) {
           case 'video':
             return 'מנגן ב-YouTube את התוצאה הראשונה ל"$q"';
@@ -1023,7 +1050,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
           case 'opened':
             return '${a.label} נפתחה. כאן אפשר לחפש בה דרך Keys';
           case 'link':
-            return 'מחפש ב-${a.label}: "$q"\nאם נפתח רק היוטיוב בלי תוצאות, בחר למטה "הקלדה בחיפוש" ונסה שוב.';
+            return 'פותח ב-${a.label} את תוצאות החיפוש ל"$q"';
           case 'typed':
             return 'חיפשתי ב-${a.label}: "$q"';
           case 'no_field':
@@ -1072,7 +1099,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     var started = false;
     var closed = false;
     var lang = prefs.getString('voice_lang') ?? 'he';
-    var mode = prefs.getString('voice_yt_mode') ?? 'link';
+    var mode = prefs.getString('voice_yt_play') ?? 'play';
 
     _sheet((ctx, setS) {
       void upd(VoidCallback f) {
@@ -1208,15 +1235,15 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         const SizedBox(height: 6),
         Row(children: [
           Expanded(
-              child: _chip('קישור ישיר (מהיר)', mode == 'link', () {
-            upd(() => mode = 'link');
-            prefs.setString('voice_yt_mode', 'link');
+              child: _chip('נגן ישר', mode == 'play', () {
+            upd(() => mode = 'play');
+            prefs.setString('voice_yt_play', 'play');
           })),
           const SizedBox(width: 8),
           Expanded(
-              child: _chip('הקלדה בחיפוש', mode == 'type', () {
-            upd(() => mode = 'type');
-            prefs.setString('voice_yt_mode', 'type');
+              child: _chip('הצג רשימת תוצאות', mode == 'list', () {
+            upd(() => mode = 'list');
+            prefs.setString('voice_yt_play', 'list');
           })),
         ]),
         const SizedBox(height: 16),
@@ -1733,7 +1760,8 @@ class VoiceParser {
   static const _searchVerbs = {
     'חפש', 'תחפש', 'חפשי', 'תחפשי', 'חיפוש', 'מצא', 'תמצא', 'מצאי', 'תמצאי',
     'נגן', 'תנגן', 'נגני', 'תנגני', 'השמע', 'תשמיע', 'השמיעי', 'תשמיעי',
-    'שים', 'תשים', 'שימי', 'תשימי', 'search', 'find', 'play',
+    'שים', 'תשים', 'שימי', 'תשימי', 'הפעל', 'תפעיל', 'הפעילי', 'תפעילי',
+    'הראה', 'תראה', 'תראי', 'search', 'find', 'play', 'show',
   };
 
   static const _fillStart = {
