@@ -815,7 +815,7 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
       'samsung' => 'הגדרות ← כללי ← רשת ← הגדרות מומחה ← להפעיל "הפעלה באמצעות נייד" (Power On with Mobile).',
       'lg' => 'הגדרות ← כללי ← התקנים ← ניהול טלוויזיה (או: חיבור) ← להפעיל "הפעלה דרך Wi‑Fi" (Turn on via Wi‑Fi). בדגמים ישנים: "Mobile TV On".',
       'vidaa' => 'הגדרות ← רשת (Network) ← להפעיל "Wake on LAN" וגם "Wake on Wireless Network".',
-      _ => 'הגדרות ← מערכת ← צריכת חשמל ואנרגיה (Power & Energy) ← להפעיל "המתנה ברשת" / "Network standby" / "Wake on LAN". אם יש "הפעלה מהירה" (Quick start) – להפעיל גם אותה.',
+      _ => 'הגדרות ← מערכת ← "התחלה מהירה": להפעיל את "התחלה מהירה" ולכבות את "מצב נמנם". אם בהגדרות ← רשת ואינטרנט יש "הפעלה דרך Wi‑Fi" / "Wake on LAN" – להפעיל גם אותה. אם עדיין לא נדלקת דרך WiFi: כבל רשת מהראוטר לטלוויזיה כמעט תמיד פותר.',
     };
     final macs = macList(tv.mac);
     _sheet((ctx, setS) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [

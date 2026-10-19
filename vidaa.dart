@@ -278,7 +278,6 @@ class VidaaConnection extends TvRemote {
   Completer<void>? _srcWait;
   final _appCache = <String, Map<String, dynamic>>{};
   final _pending = <void Function()>[];
-  String? _dialUrl;
 
   void _set(TvStatus s, {String? err}) {
     if (_disposed) return;
@@ -750,84 +749,8 @@ class VidaaConnection extends TvRemote {
   }
 
   /// מנגן סרטון ביוטיוב שבטלוויזיה – כמו "שידור" מהטלפון (DIAL)
-  Future<bool> _dialYoutube(String videoId) async {
-    final urls = <String>[
-      if (_dialUrl != null) _dialUrl!,
-    ];
-    if (urls.isEmpty) {
-      final u = await _findDial();
-      if (u != null) urls.add(u);
-    }
-    for (final p in [56789, 56790, 36866, 8008]) {
-      final u = 'http://${tv.host}:$p/apps/';
-      if (!urls.contains(u)) urls.add(u);
-    }
-    for (final u in urls) {
-      final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
-      try {
-        final req = await client.postUrl(Uri.parse('${u}YouTube'));
-        req.headers.contentType = ContentType('text', 'plain', charset: 'utf-8');
-        req.write('v=$videoId');
-        final res = await req.close().timeout(const Duration(seconds: 5));
-        await res.drain<void>();
-        if (res.statusCode == 200 || res.statusCode == 201) {
-          _dialUrl = u;
-          return true;
-        }
-      } catch (_) {
-      } finally {
-        client.close(force: true);
-      }
-    }
-    return false;
-  }
-
-  Future<String?> _findDial() async {
-    RawDatagramSocket? sock;
-    final locations = <String>[];
-    try {
-      sock = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-      final msg = utf8.encode('M-SEARCH * HTTP/1.1\r\n'
-          'HOST: 239.255.255.250:1900\r\n'
-          'MAN: "ssdp:discover"\r\n'
-          'MX: 1\r\n'
-          'ST: urn:dial-multiscreen-org:service:dial:1\r\n\r\n');
-      sock.listen((e) {
-        if (e != RawSocketEvent.read) return;
-        final d = sock?.receive();
-        if (d == null || d.address.address != tv.host) return;
-        final m = RegExp(r'^location:\s*(\S+)', caseSensitive: false, multiLine: true)
-            .firstMatch(utf8.decode(d.data, allowMalformed: true));
-        if (m != null) locations.add(m.group(1)!);
-      });
-      for (var i = 0; i < 2; i++) {
-        try {
-          sock.send(msg, InternetAddress('239.255.255.250'), 1900);
-          sock.send(msg, InternetAddress(tv.host), 1900);
-        } catch (_) {}
-        await Future.delayed(const Duration(milliseconds: 700));
-      }
-    } catch (_) {
-    } finally {
-      sock?.close();
-    }
-    for (final loc in locations) {
-      final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
-      try {
-        final res = await (await client.getUrl(Uri.parse(loc))).close();
-        await res.drain<void>();
-        var app = res.headers.value('application-url');
-        if (app != null && app.isNotEmpty) {
-          if (!app.endsWith('/')) app = '$app/';
-          return app;
-        }
-      } catch (_) {
-      } finally {
-        client.close(force: true);
-      }
-    }
-    return null;
-  }
+  Future<bool> _dialYoutube(String videoId) =>
+      dialLaunch(tv.host, 'YouTube', body: 'v=$videoId', ports: const [56789, 56790, 36866, 8008]);
 
   // ---------- הדלקה ----------
 

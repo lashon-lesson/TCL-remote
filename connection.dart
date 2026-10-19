@@ -63,6 +63,9 @@ class TvConnection extends TvRemote {
 
   // ---------- שליטה ----------
 
+  bool _connectingNow = false;
+  bool _waking = false;
+
   @override
   Future<void> connect() async {
     _retry?.cancel();
@@ -71,10 +74,12 @@ class TvConnection extends TvRemote {
     if (!tv.paired) return startPairing();
     _set(TvStatus.connecting);
     try {
+      _connectingNow = true;
       final s = await SecureSocket.connect(tv.host, 6466,
-          context: _ctx(),
-          onBadCertificate: (_) => true,
-          timeout: const Duration(seconds: 5));
+              context: _ctx(),
+              onBadCertificate: (_) => true,
+              timeout: const Duration(seconds: 5))
+          .whenComplete(() => _connectingNow = false);
       if (_disposed) {
         s.destroy();
         return;
@@ -85,10 +90,13 @@ class TvConnection extends TvRemote {
           onDone: () => _onRemoteClosed(s, null),
           onError: (e) => _onRemoteClosed(s, e),
           cancelOnError: true);
-    } on HandshakeException {
-      _unpaired();
     } on TlsException {
-      _unpaired();
+      // בזמן התעוררות הטלוויזיה החיבור נקטע לפעמים באמצע – זה לא אומר שהצימוד בוטל
+      if (_waking) {
+        _scheduleRetry('הטלוויזיה מתעוררת…');
+      } else {
+        _unpaired();
+      }
     } catch (e) {
       _scheduleRetry('הטלוויזיה לא עונה – בדוק שהיא דלוקה ושהכתובת נכונה');
     }
@@ -296,21 +304,40 @@ class TvConnection extends TvRemote {
       return 'off';
     }
 
-    // לא מחובר: מנסים להעיר ולהתחבר מחדש
+    // לא מחובר: מעירים בכמה דרכים במקביל ומנסים להתחבר שוב ושוב
     var wol = false;
     final mac = tv.mac;
     if (mac != null) wol = await wakeOnLan(mac, tv.host);
     _fails = 0;
+    _waking = true;
+    Timer(const Duration(seconds: 40), () => _waking = false);
     connect();
-    for (var t = 0; t < 40; t++) {
+    var dialed = false;
+    for (var t = 0; t < 100; t++) {
       await Future.delayed(const Duration(milliseconds: 250));
       if (_disposed) return 'unreachable';
       if (isReady) {
         await Future.delayed(const Duration(milliseconds: 400));
-        sendKey(224);
+        sendKey(224); // WAKEUP
+        if (dialed) {
+          // ה"שידור" פתח יוטיוב – חוזרים למסך הבית
+          Timer(const Duration(seconds: 4), () => sendKey(3));
+        }
         return 'on';
       }
+      // כל 3 שניות: עוד פקודת הדלקה ועוד ניסיון חיבור
+      if (t > 0 && t % 12 == 0) {
+        if (mac != null) wakeOnLan(mac, tv.host);
+        if (!isReady && status != TvStatus.pairing && !_connectingNow) connect();
+      }
+      // אחרי 5 שניות בלי תשובה: "שידור" ליוטיוב – מעיר הרבה טלוויזיות Google TV
+      if (t == 20 && !dialed) {
+        dialLaunch(tv.host, 'YouTube').then((ok) {
+          if (ok) dialed = true;
+        });
+      }
     }
+    if (dialed) return 'waking';
     if (wol) {
       for (final s in [5, 10, 20, 30]) {
         Timer(Duration(seconds: s), () {
