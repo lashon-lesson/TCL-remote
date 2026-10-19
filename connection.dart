@@ -119,6 +119,7 @@ class TvConnection extends TvRemote {
                   .str(5, 'il.lior.tclremote')
                   .str(6, '1.0.0'))));
       _fails = 0;
+      _readyAt = DateTime.now();
       _set(TvStatus.ready);
       _flushPending();
       final w = _homeAfterWake;
@@ -163,6 +164,12 @@ class TvConnection extends TvRemote {
       notifyListeners();
     } else if (f.has(40)) {
       powered = f.msg(40)?.int32(1) == 1;
+      // שינוי שקרה בזמן שמחוברים (למשל הדליקו בשלט הרגיל) – מעדכן את מה שהשלט יודע.
+      // הדיווח הראשון אחרי התחברות לא אמין בהמתנה, אז מתעלמים ממנו
+      final r = _readyAt;
+      if (r != null && DateTime.now().difference(r).inSeconds > 3) {
+        _lastPower = powered! ? 'on' : 'off';
+      }
       notifyListeners();
     } else if (f.has(50)) {
       final v = f.msg(50)!;
@@ -300,13 +307,17 @@ class TvConnection extends TvRemote {
   /// מדליק: WAKEUP, ואם הטלוויזיה לא דיווחה שנדלקה – "בית" (חלק מטלוויזיות TCL מתעלמות מ־WAKEUP)
   Future<String> _turnOn() async {
     sendKey(224);
-    for (var i = 0; i < 6; i++) {
-      await Future.delayed(const Duration(milliseconds: 150));
-      if (powered == true) return 'on';
-    }
-    sendKey(3);
+    await Future.delayed(const Duration(milliseconds: 250));
+    sendKey(3); // "בית" – מה שבאמת מעיר את ה־TCL
+    _lastPower = 'on';
+    powered = true;
+    notifyListeners();
     return 'on';
   }
+
+  /// מה השלט עשה בפעם האחרונה. גובר על הדיווח של הטלוויזיה, שלא תמיד נכון בהמתנה
+  String? _lastPower;
+  DateTime? _readyAt;
 
   /// מחכה רגע לדיווח מהטלוויזיה אם היא דלוקה או בהמתנה
   Future<void> _waitPowerState() async {
@@ -320,9 +331,16 @@ class TvConnection extends TvRemote {
   @override
   Future<String> power() async {
     if (isReady) {
-      await _waitPowerState();
-      if (powered != true) return _turnOn();
+      final bool on;
+      if (_lastPower != null) {
+        on = _lastPower == 'on';
+      } else {
+        await _waitPowerState();
+        on = powered != false;
+      }
+      if (!on) return _turnOn();
       sendKey(26);
+      _lastPower = 'off';
       powered = false;
       notifyListeners();
       return 'off';
@@ -342,8 +360,7 @@ class TvConnection extends TvRemote {
       if (_disposed) return 'unreachable';
       if (isReady) {
         await Future.delayed(const Duration(milliseconds: 300));
-        await _waitPowerState();
-        if (powered == true) return 'on';
+        // לחצו הדלקה כשהשלט לא היה מחובר – כמעט תמיד כי הטלוויזיה כבויה
         return _turnOn();
       }
       if (dialed) {
