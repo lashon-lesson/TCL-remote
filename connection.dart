@@ -167,12 +167,15 @@ class TvConnection extends TvRemote {
       imeAt = DateTime.now();
       notifyListeners();
     } else if (f.has(40)) {
-      powered = f.msg(40)?.int32(1) == 1;
-      // שינוי שקרה בזמן שמחוברים (למשל הדליקו בשלט הרגיל) – מעדכן את מה שהשלט יודע.
-      // הדיווח הראשון אחרי התחברות לא אמין בהמתנה, אז מתעלמים ממנו
-      final r = _readyAt;
-      if (r != null && DateTime.now().difference(r).inSeconds > 3) {
-        _lastPower = powered! ? 'on' : 'off';
+      final on = f.msg(40)?.int32(1) == 1;
+      // ב"התחלה מהירה" ה־TCL מדווחת "דלוקה" גם כשהמסך כבוי – לכן דיווח "דלוקה" לא גובר
+      // על כיבוי שהשלט עשה. דיווח "כבויה" כן אמין
+      if (on && _lastPower == 'off') {
+        powered = false;
+      } else {
+        powered = on;
+        final r = _readyAt;
+        if (!on && r != null && DateTime.now().difference(r).inSeconds > 3) _lastPower = 'off';
       }
       notifyListeners();
     } else if (f.has(50)) {
