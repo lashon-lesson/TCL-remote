@@ -171,9 +171,27 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
     c.connect();
   }
 
+  final _relocAt = <String, DateTime>{};
+
+  /// לא מצליחים להתחבר – אולי הראוטר נתן לטלוויזיה כתובת חדשה. מחפשים אותה ברשת
+  Future<void> _relocate(TvRemote c) async {
+    final tv = c.tv;
+    final last = _relocAt[tv.id];
+    if (last != null && DateTime.now().difference(last).inMinutes < 3) return;
+    _relocAt[tv.id] = DateTime.now();
+    final taken = {for (final t in tvs) if (t.id != tv.id) t.host};
+    final ip = await relocateTv(tv, taken);
+    if (ip == null || !mounted || conns[tv.id] != c || c.isReady) return;
+    tv.host = ip;
+    store?.saveTvs(tvs);
+    _toast('${tv.name} קיבלה כתובת חדשה ברשת ($ip) – מתחבר מחדש');
+    c.connect();
+  }
+
   void _onConnChange(TvRemote c) {
     if (!mounted) return;
     setState(() {});
+    if (c.status == TvStatus.error) _relocate(c);
     if (c.tv.id == sel &&
         (c.status == TvStatus.pairing || c.status == TvStatus.approve) &&
         _pairPromptFor != c.tv.id) {
@@ -978,6 +996,29 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
         }
       }
 
+      // חיפוש ביוטיוב בלי המקלדת של הטלוויזיה – עובד גם בעברית
+      Future<void> ytSearch(bool play) async {
+        final q = text.text.trim();
+        final c = _need();
+        if (c == null) return;
+        if (q.isEmpty) {
+          _toast('קודם כתוב מה לחפש');
+          return;
+        }
+        debounce?.cancel();
+        Navigator.pop(ctx);
+        _toast(play ? 'מחפש ומנגן ביוטיוב…' : 'פותח תוצאות ביוטיוב…');
+        final r = await c.searchIn(_searchApp(), q, preferLink: play);
+        if (!mounted) return;
+        _toast(switch (r) {
+          'video' => 'מנגן ביוטיוב: "$q"',
+          'link' => 'פותח ביוטיוב את התוצאות ל"$q"',
+          'novideo' => 'יוטיוב נפתחה, אבל לא נמצאה תוצאה ל"$q"',
+          'opened' => 'יוטיוב נפתחה',
+          _ => 'הטלוויזיה לא עונה',
+        });
+      }
+
       Future<void> asKeys() async {
         final c = _need();
         if (c == null || text.text.isEmpty) return;
@@ -1018,10 +1059,15 @@ class _RemoteHomeState extends State<RemoteHome> with WidgetsBindingObserver {
               hint: 'מה לחפש?',
               autofocus: true,
               onChanged: live,
-              onSubmit: (_) => search()),
-          _hint('הטקסט נשלח לטלוויזיה כשמפסיקים להקליד לשנייה, או בלחיצה על "חפש".'),
+              onSubmit: (_) => flush()),
           Row(children: [
-            Expanded(flex: 2, child: _primary('חפש ↵', search)),
+            Expanded(child: _primary('▶ נגן ביוטיוב', () => ytSearch(true))),
+            const SizedBox(width: 8),
+            Expanded(child: _primary('🔍 תוצאות ביוטיוב', () => ytSearch(false))),
+          ]),
+          _hint('בשאר האפליקציות: הטקסט נשלח לשדה שפתוח בטלוויזיה כשמפסיקים להקליד לשנייה. "אישור" שולח אותו ולוחץ Enter.'),
+          Row(children: [
+            Expanded(flex: 2, child: _primary('אישור ↵', search)),
             const SizedBox(width: 8),
             Expanded(
               child: SizedBox(

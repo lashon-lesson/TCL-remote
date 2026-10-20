@@ -1,9 +1,11 @@
 // חיפוש טלוויזיות ברשת: Android TV (פורט 6466), סמסונג (8001), LG (3000/3001) ו-VIDAA (36669)
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
 import 'samsung.dart';
+import 'store.dart';
 import 'vidaa.dart';
 
 typedef FoundTv = ({String ip, String brand, String name});
@@ -83,4 +85,61 @@ Future<List<FoundTv>> scanForTvs({void Function(double)? onProgress}) async {
   found.sort((a, b) =>
       int.parse(a.ip.split('.').last).compareTo(int.parse(b.ip.split('.').last)));
   return found;
+}
+
+
+/// כתובות MAC שטלוויזיה עם Chromecast מובנה מוסרת (פורט 8008)
+Future<List<String>> castMacs(String ip) async {
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+  try {
+    final req =
+        await client.getUrl(Uri.parse('http://$ip:8008/setup/eureka_info?params=device_info,net'));
+    final res = await req.close().timeout(const Duration(seconds: 3));
+    final body = await res.transform(utf8.decoder).join().timeout(const Duration(seconds: 3));
+    return macList(RegExp(r'"(?:mac_address|macAddress|ethernet_mac_address|wifi_mac)"\s*:\s*"([^"]+)"')
+        .allMatches(body)
+        .map((m) => m.group(1))
+        .join(','));
+  } catch (_) {
+    return const [];
+  } finally {
+    client.close(force: true);
+  }
+}
+
+Future<List<String>> _macsOf(FoundTv t) async => switch (t.brand) {
+      'samsung' => macList((await samsungInfo(t.ip))?.mac),
+      'vidaa' => macList((await vidaaInfo(t.ip))?.mac),
+      'atv' => await castMacs(t.ip),
+      _ => const <String>[],
+    };
+
+/// הטלוויזיה קיבלה מהראוטר כתובת חדשה? מחפש אותה ברשת.
+/// מחזיר את הכתובת החדשה, או null אם לא נמצאה בוודאות
+Future<String?> relocateTv(TvDevice tv, Set<String> takenHosts) async {
+  // אם בכתובת הישנה עדיין יש טלוויזיה מאותו סוג – לא מחפשים
+  final here = await detectTv(tv.host, ms: 1500);
+  if (here != null && here.brand == tv.brand) return null;
+
+  final found = await scanForTvs();
+  final cands = [
+    for (final t in found)
+      if (t.brand == tv.brand && t.ip != tv.host && !takenHosts.contains(t.ip)) t
+  ];
+  if (cands.isEmpty) return null;
+
+  final mine = macList(tv.mac);
+  if (mine.isNotEmpty) {
+    for (final t in cands) {
+      final m = await _macsOf(t);
+      if (m.any(mine.contains)) return t.ip;
+    }
+    // יש לנו MAC אבל אף טלוויזיה לא התאימה – אולי היא לא מוסרת MAC
+    final unknown = <FoundTv>[];
+    for (final t in cands) {
+      if ((await _macsOf(t)).isEmpty) unknown.add(t);
+    }
+    return unknown.length == 1 ? unknown.first.ip : null;
+  }
+  return cands.length == 1 ? cands.first.ip : null;
 }
